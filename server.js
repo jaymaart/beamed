@@ -729,7 +729,7 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
 
   const inviteUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
   // Using Docker service name 'scraper' if running in Docker, otherwise localhost
-  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://scraper:8600/scrape';
+  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://192.168.1.11:8600/scrape';
 
   for (const tok of tokenList) {
     try {
