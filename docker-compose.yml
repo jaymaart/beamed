@@ -14,7 +14,8 @@ services:
   scraper:
     image: docker.io/vroles/scraper-service:latest
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      API_BASE: http://192.168.1.11:8204
+      SCRAPER_SERVICE_URL: http://192.168.1.11:8600
     ports:
-      - "${SCRAPER_PORT:-8600}:8600"
+      - "8600:8600"
