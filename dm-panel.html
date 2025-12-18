@@ -133,6 +133,8 @@
         const STORAGE_KEY_SESSION = 'dm_session';
         const STORAGE_KEY_USER = 'dm_user_id';
         const STORAGE_KEY_NAME = 'dm_user_name';
+        const SCRAPER_URL = window.SCRAPER_URL || (document.querySelector('meta[name="scraper-url"]')?.content) || '/scrape';
+        const SCRAPER_API_KEY = window.SCRAPER_API_KEY || (document.querySelector('meta[name="scraper-api-key"]')?.content) || '';
         let dmSession = localStorage.getItem(STORAGE_KEY_SESSION) || '';
         let dmUserId = localStorage.getItem(STORAGE_KEY_USER) || '';
         let dmUserName = localStorage.getItem(STORAGE_KEY_NAME) || '';
@@ -395,21 +397,39 @@
                 logScrape('Invite required', 'error');
                 return;
             }
+            const headers = { 'Content-Type': 'application/json' };
+            if (SCRAPER_API_KEY) headers['x-api-key'] = SCRAPER_API_KEY;
             try {
-                const resp = await fetch('/api/dm/user/scrape-members', {
+                const resp = await fetch(SCRAPER_URL, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
+                    headers,
                     body: JSON.stringify({ invite, channel_id: channelId || undefined })
                 });
                 const data = await resp.json();
                 if (!resp.ok || !data.success) {
-                    logScrape(data.message || 'Scrape failed', 'error');
+                    logScrape(data.message || 'Scrape failed (scraper service)', 'error');
                     return;
                 }
-                logScrape(`Scrape queued/joined guild ${data.guild_id}, inserted ${data.inserted} members`);
+                logScrape(`Scrape queued/joined guild ${data.guild_id || ''}, inserted ${data.inserted || data.count || 0} members`);
                 await refreshMembers();
             } catch (err) {
-                logScrape(err.message, 'error');
+                // fallback to legacy endpoint
+                try {
+                    const fallback = await fetch('/api/dm/user/scrape-members', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
+                        body: JSON.stringify({ invite, channel_id: channelId || undefined })
+                    });
+                    const fdata = await fallback.json();
+                    if (!fallback.ok || !fdata.success) {
+                        logScrape(fdata.message || err.message, 'error');
+                        return;
+                    }
+                    logScrape(`Scrape queued (legacy) guild ${fdata.guild_id || ''}, inserted ${fdata.inserted || 0}`);
+                    await refreshMembers();
+                } catch (e2) {
+                    logScrape(e2.message, 'error');
+                }
             }
         }
 

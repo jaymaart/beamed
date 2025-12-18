@@ -921,6 +921,33 @@ app.delete('/api/dm/user/members', requireDmUser, asyncHandler(async (req, res) 
   res.json({ success: true });
 }));
 
+app.post('/api/dm/user/members', requireDmUser, asyncHandler(async (req, res) => {
+  const list = (req.body?.members || []).filter(Boolean);
+  if (!Array.isArray(list) || !list.length) {
+    return res.status(400).json({ success: false, message: 'members array required' });
+  }
+  const guildId = req.body?.guild_id || null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const mid of list) {
+      await client.query(
+        `INSERT INTO dm_members (id, user_id, guild_id, member_id, created_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (user_id, member_id) DO NOTHING`,
+        [uuidv4(), req.dmUserId, guildId, mid]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, inserted: list.length });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}));
+
 
 app.post('/api/solve-task', asyncHandler(async (req, res) => {
   const { taskId, token, workerId } = req.body || {};
