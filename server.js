@@ -728,7 +728,8 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
   if (!inviteCode) throw new Error('Invite code required');
 
   const inviteUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
-  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://localhost:8600/scrape';
+  // Using Docker service name 'scraper' if running in Docker, otherwise localhost
+  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://scraper:8600/scrape';
 
   for (const tok of tokenList) {
     try {
