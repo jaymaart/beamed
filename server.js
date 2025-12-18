@@ -2,6 +2,7 @@ const http = require('http');
 const path = require('path');
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const { spawn } = require('child_process');
 const WebSocket = require('ws');
 const { Pool } = require('pg');
 
@@ -726,177 +727,72 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
   inviteCode = inviteCode.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
   if (!inviteCode) throw new Error('Invite code required');
 
-  // Optional: pick a proxy for scraping
-  let proxyAgent = null;
-  if (useProxy) {
-    const proxiesRes = await pool.query('SELECT proxy FROM dm_proxies WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1', [userId]);
-    if (proxiesRes.rowCount) {
-      try {
-        const { HttpsProxyAgent } = require('https-proxy-agent');
-        proxyAgent = new HttpsProxyAgent(proxiesRes.rows[0].proxy);
-      } catch (_) { /* ignore proxy errors */ }
-    }
-  }
-
-  let guildId = null;
-  let workingToken = null;
-
-  const inviteUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
-
   for (const tok of tokenList) {
-    // Resolve invite to get guild id first
-    const resolveResp = await fetch(inviteUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': tok
-      },
-      agent: proxyAgent
-    });
-    const resolveData = await resolveResp.json().catch(() => ({}));
-    if (!(resolveResp.ok && resolveData?.guild?.id)) {
-      continue; // try next token
-    }
-    guildId = resolveData.guild.id;
+    try {
+      const result = await new Promise((resolve, reject) => {
+        const py = spawn('python', [
+          path.join(__dirname, 'scraper', 'scrape_members.py'),
+          tok,
+          inviteCode
+        ]);
 
-    // Join via invite to ensure access
-    const doJoin = async (body) => {
-      const resp = await fetch(inviteUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': tok,
-          ...(body ? { 'Content-Type': 'application/json' } : {})
-        },
-        agent: proxyAgent,
-        body: body ? JSON.stringify(body) : undefined
-      });
-      return resp;
-    };
+        let stdout = '';
+        let stderr = '';
 
-    let joinResp = await doJoin();
-    if (!joinResp.ok) {
-      const bodyText = await joinResp.text().catch(() => '');
-      let joinJson = {};
-      try { joinJson = JSON.parse(bodyText); } catch (_) { joinJson = {}; }
+        py.stdout.on('data', (data) => stdout += data.toString());
+        py.stderr.on('data', (data) => stderr += data.toString());
 
-      // Captcha flow
-      if (joinResp.status === 400 && joinJson?.captcha_sitekey) {
-        const siteKey = joinJson.captcha_sitekey;
-        const rqdata = joinJson.captcha_rqdata || joinJson.captcha_rqtoken || joinJson.rqdata || null;
-        const captchaService = joinJson.captcha_service || 'hcaptcha';
-        if (!API_BASE) throw new Error('API_BASE not set for captcha solve');
-
-        // forward captcha
-        const taskResp = await fetch(`${API_BASE}/api/tasks`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ siteKey, rqdata, captcha_service: captchaService, raw: joinJson })
-        });
-        const taskData = await taskResp.json().catch(() => ({}));
-        if (!taskResp.ok || !taskData.success || !taskData.task?.id) {
-          throw new Error(`Failed to forward captcha for join (${taskResp.status})`);
-        }
-        const taskId = taskData.task.id;
-
-        // poll for solve
-        let solvedToken = null;
-        const deadline = Date.now() + 120000; // 2 minutes
-        while (!solvedToken && Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 4000));
-          const res = await fetch(`${API_BASE}/api/task-result?taskId=${encodeURIComponent(taskId)}`);
-          const data = await res.json().catch(() => ({}));
-          if (data.success && data.status === 'solved' && data.token) {
-            solvedToken = data.token;
-            break;
+        py.on('close', (code) => {
+          if (code !== 0) {
+            // Try to parse error from stdout if present (as we print json there too)
+            try {
+                const errJson = JSON.parse(stdout);
+                if (errJson.error) return reject(new Error(errJson.error));
+            } catch {}
+            return reject(new Error(stderr || `Python script exited with code ${code}`));
           }
-        }
-        if (!solvedToken) throw new Error('Captcha solve timeout for invite join');
-
-        // retry join with captcha solution
-        joinResp = await doJoin({
-          captcha_key: solvedToken,
-          captcha_rqtoken: joinJson.captcha_rqtoken
+          try {
+            const data = JSON.parse(stdout);
+            if (data.error) reject(new Error(data.error));
+            else resolve(data);
+          } catch (e) {
+            reject(new Error(`Failed to parse Python output: ${e.message}\nStdout: ${stdout}`));
+          }
         });
-        if (!joinResp.ok) {
-          const retryText = await joinResp.text().catch(() => '');
-          let retryJson = {};
-          try { retryJson = JSON.parse(retryText); } catch (_) { retryJson = {}; }
-          throw new Error(`Failed to join invite after captcha (${joinResp.status} ${joinResp.statusText}) ${retryText}`);
-        }
-      } else {
-        // if unauthorized, try next token
-        if (joinResp.status === 401 || joinResp.status === 403) {
-          continue;
-        }
-        throw new Error(`Failed to join invite (${joinResp.status} ${joinResp.statusText}) ${bodyText}`);
+      });
+
+      if (result.success) {
+         // Insert into DB
+         const guildId = result.guild_id;
+         const members = result.members || [];
+         
+         const client = await pool.connect();
+         try {
+           await client.query('BEGIN');
+           for (const mid of members) {
+             await client.query(
+               `INSERT INTO dm_members (id, user_id, guild_id, member_id, created_at)
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (user_id, member_id) DO NOTHING`,
+               [uuidv4(), userId, guildId, mid]
+             );
+           }
+           await client.query('COMMIT');
+           return { guildId, inserted: members.length };
+         } catch (err) {
+           await client.query('ROLLBACK');
+           throw err;
+         } finally {
+           client.release();
+         }
       }
-    }
-
-    workingToken = tok;
-    break;
-  }
-
-  if (!workingToken || !guildId) {
-    throw new Error('Failed to resolve/join invite with available tokens (401/403).');
-  }
-
-  const seen = new Set();
-  let after = '0';
-  let fetched = 0;
-
-  if (channelId) {
-    // scrape message authors from channel
-    let before = null;
-    while (seen.size < maxMembers) {
-      const url = `https://discord.com/api/v9/channels/${channelId}/messages?limit=100${before ? `&before=${before}` : ''}`;
-      const { resp, data } = await fetchJsonWithToken(url, workingToken, proxyAgent);
-      if (!resp.ok || !Array.isArray(data) || !data.length) break;
-      for (const msg of data) {
-        if (msg?.author?.id && !seen.has(msg.author.id)) {
-          seen.add(msg.author.id);
-        }
-      }
-      before = data[data.length - 1]?.id || before;
-      if (data.length < 100) break;
-    }
-  } else {
-    // fallback to full guild member list
-    while (fetched < maxMembers) {
-      const url = `https://discord.com/api/v9/guilds/${guildId}/members?limit=1000&after=${after}`;
-      const { resp, data } = await fetchJsonWithToken(url, workingToken, proxyAgent);
-      if (!resp.ok || !Array.isArray(data) || !data.length) break;
-      for (const m of data) {
-        if (m?.user?.id && !seen.has(m.user.id)) {
-          seen.add(m.user.id);
-        }
-      }
-      fetched += data.length;
-      after = data[data.length - 1]?.user?.id || after;
-      if (data.length < 1000) break;
+    } catch (err) {
+      console.error(`Token ${tok.substring(0, 10)}... failed:`, err.message);
+      // continue to next token
     }
   }
 
-  if (!seen.size) return { guildId, inserted: 0 };
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    for (const mid of seen) {
-      await client.query(
-        `INSERT INTO dm_members (id, user_id, guild_id, member_id, created_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (user_id, member_id) DO NOTHING`,
-        [uuidv4(), userId, guildId, mid]
-      );
-    }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  return { guildId, inserted: seen.size };
+  throw new Error('All tokens failed to scrape or join the server.');
 }
 
 app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, res) => {

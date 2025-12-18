@@ -1,118 +1,100 @@
-import os
-import sys
+import discord
 import asyncio
 import json
-import re
-import requests
-import discord
-from discord.ext import commands
+import sys
+import os
 
-# Env
-API_BASE = os.getenv("API_BASE", "http://localhost:8000").rstrip("/")
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
-DEFAULT_MAX_MESSAGES = int(os.getenv("SCRAPE_MAX_MESSAGES", "5000"))
+# Set up stdout to be unbuffered
+sys.stdout.reconfigure(encoding='utf-8')
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-intents = discord.Intents.default()
-intents.members = True
-intents.guilds = True
-intents.presences = False
-intents.messages = True
-intents.message_content = True
-
-def upload_members(members, guild_id=None):
-    if not members:
-        return
-    resp = requests.post(
-        f"{API_BASE}/api/dm/user/members",
-        headers={"Content-Type": "application/json"},
-        json={"members": list(members), "guild_id": guild_id},
-        timeout=60
-    )
-    data = resp.json()
-    if not resp.ok or data.get("success") is False:
-        raise RuntimeError(f"Upload failed: {data.get('message')}")
-
-async def run_scrape(invite: str = "", guild_id: str = "", channel_id: str = "", max_messages: int = None):
-    DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
-    if not DISCORD_TOKEN:
-        raise RuntimeError("DISCORD_TOKEN env required")
-
-    if max_messages is None:
-        max_messages = DEFAULT_MAX_MESSAGES
-
-    member_ids = set()
-
-    bot = commands.Bot(command_prefix="?", self_bot=True, intents=intents)
-
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    async def ensure_join():
-        if invite:
-            code = invite
-            code = re.sub(r"^https?://(www\.)?discord\.gg/", "", code, flags=re.I)
-            code = re.sub(r"^https?://discord\.com/invite/", "", code, flags=re.I).strip()
-            invite_obj = await bot.fetch_invite(code)
-            try:
-                await invite_obj.accept()
-            except discord.HTTPException:
-                pass
-
-    async def scrape_channel(channel: discord.TextChannel):
-        count = 0
-        async for msg in channel.history(limit=max_messages):
-            member_ids.add(str(msg.author.id))
-            count += 1
-            if count >= max_messages:
-                break
-
-    async def scrape_guild(target_guild: discord.Guild):
-        if channel_id:
-            try:
-                ch = await bot.fetch_channel(int(channel_id))
-                await scrape_channel(ch)
-            except Exception as e:
-                print(f"[SCRAPE] Failed channel scrape: {e}")
-        else:
-            try:
-                async for m in target_guild.fetch_members(limit=None):
-                    member_ids.add(str(m.id))
-            except Exception as e:
-                print(f"[SCRAPE] Member fetch failed: {e}")
-
-    @bot.event
-    async def on_ready():
+class ScraperClient(discord.Client):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scraped_data = []
+        self.target_guild = None
+        
+async def scrape(token, invite_code):
+    client = ScraperClient()
+    
+    try:
+        await client.login(token)
+        
+        # Start connection in background
+        connect_task = asyncio.create_task(client.connect())
+        
+        # Wait for ready
+        await client.wait_until_ready()
+        
+        # Resolve invite
         try:
-            if invite:
-                await ensure_join()
-            target_guild = None
-            if guild_id:
-                try:
-                    target_guild = await bot.fetch_guild(int(guild_id))
-                except Exception as e:
-                    print(f"[SCRAPE] Failed to fetch guild {guild_id}: {e}")
-            if not target_guild:
-                if not bot.guilds:
-                    print("[SCRAPE] No guilds available on this token.")
-                    await bot.close()
-                    return
-                target_guild = bot.guilds[0]
-            await scrape_guild(target_guild)
-            if member_ids:
-                print(f"[SCRAPE] Scraped {len(member_ids)} members, uploading...")
-                upload_members(member_ids, guild_id=str(target_guild.id))
-                print("[SCRAPE] Upload complete.")
-            else:
-                print("[SCRAPE] No members collected.")
-        finally:
-            await bot.close()
+            invite = await client.fetch_invite(invite_code)
+        except discord.NotFound:
+            print(json.dumps({"error": "Invite not found"}))
+            await client.close()
+            return
+            
+        guild = invite.guild
+        if isinstance(guild, discord.Object):
+            # We are not in the guild, or it's a partial object
+            # Try to join
+            try:
+                await invite.accept()
+                # Wait a bit for guild to become available in cache
+                await asyncio.sleep(2)
+                guild = client.get_guild(invite.guild.id)
+            except Exception as e:
+                print(json.dumps({"error": f"Failed to join guild: {str(e)}"}))
+                await client.close()
+                return
 
-    bot.run(DISCORD_TOKEN, log_handler=None, log_level=discord.logging.CRITICAL)
-    return {"count": len(member_ids)}
+        if not guild:
+            # Try to find it in cache if we were already in it
+            guild = client.get_guild(invite.guild.id)
+            
+        if not guild:
+            print(json.dumps({"error": "Could not resolve guild after join"}))
+            await client.close()
+            return
+
+        members_data = []
+        
+        # Scrape guild members
+        # discord.py-self allows fetching members
+        try:
+            # This might take a while for large servers
+            if not guild.chunked:
+                await guild.chunk()
+            
+            for member in guild.members:
+                members_data.append(member.id)
+                
+        except Exception as e:
+                print(json.dumps({"error": f"Member scrape failed: {str(e)}"}))
+                await client.close()
+                return
+
+        # Output result
+        print(json.dumps({
+            "success": True,
+            "guild_id": str(guild.id),
+            "members": members_data,
+            "count": len(members_data)
+        }))
+        
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+    finally:
+        await client.close()
+        # Ensure the loop stops
+        if not connect_task.done():
+            connect_task.cancel()
 
 if __name__ == "__main__":
-    asyncio.run(run_scrape())
-
+    if len(sys.argv) < 3:
+        print(json.dumps({"error": "Usage: python scrape_members.py <token> <invite_code>"}), file=sys.stderr)
+        sys.exit(1)
+        
+    token = sys.argv[1]
+    invite_code = sys.argv[2]
+    
+    asyncio.run(scrape(token, invite_code))
