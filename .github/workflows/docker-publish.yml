@@ -19,7 +19,8 @@ env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: docker.io
   # github.repository as <account>/<repo>
-  IMAGE_NAME: vroles/solver-serivce
+  IMAGE_NAME: vroles/solver-service
+  SCRAPER_IMAGE_NAME: vroles/scraper-service
 
 
 jobs:
@@ -61,38 +62,67 @@ jobs:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_SECRET }}
 
-      # Extract metadata (tags, labels) for Docker
+      # Extract metadata (tags, labels) for Docker (APP)
       # https://github.com/docker/metadata-action
-      - name: Extract Docker metadata
-        id: meta
+      - name: Extract Docker metadata (App)
+        id: meta-app
         uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
-      # Build and push Docker image with Buildx (don't push on PR)
+      # Build and push Docker image with Buildx (don't push on PR) (APP)
       # https://github.com/docker/build-push-action
-      - name: Build and push Docker image
-        id: build-and-push
+      - name: Build and push Docker image (App)
+        id: build-and-push-app
         uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
         with:
           context: .
+          file: Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-app.outputs.tags }}
+          labels: ${{ steps.meta-app.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Sign the resulting Docker image digest except on PRs.
+      # Sign the resulting Docker image digest except on PRs. (APP)
       # This will only write to the public Rekor transparency log when the Docker
       # repository is public to avoid leaking data.  If you would like to publish
       # transparency data even for private images, pass --force to cosign below.
       # https://github.com/sigstore/cosign
-      - name: Sign the published Docker image
+      - name: Sign the published Docker image (App)
         if: ${{ github.event_name != 'pull_request' }}
         env:
           # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
-          TAGS: ${{ steps.meta.outputs.tags }}
-          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+          TAGS: ${{ steps.meta-app.outputs.tags }}
+          DIGEST: ${{ steps.build-and-push-app.outputs.digest }}
         # This step uses the identity token to provision an ephemeral certificate
         # against the sigstore community Fulcio instance.
+        run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+
+      # Extract metadata (tags, labels) for Docker (SCRAPER)
+      - name: Extract Docker metadata (Scraper)
+        id: meta-scraper
+        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.SCRAPER_IMAGE_NAME }}
+
+      # Build and push Docker image with Buildx (don't push on PR) (SCRAPER)
+      - name: Build and push Docker image (Scraper)
+        id: build-and-push-scraper
+        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
+        with:
+          context: .
+          file: scraper/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-scraper.outputs.tags }}
+          labels: ${{ steps.meta-scraper.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Sign the resulting Docker image digest except on PRs. (SCRAPER)
+      - name: Sign the published Docker image (Scraper)
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          TAGS: ${{ steps.meta-scraper.outputs.tags }}
+          DIGEST: ${{ steps.build-and-push-scraper.outputs.digest }}
         run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}

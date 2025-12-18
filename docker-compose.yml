@@ -12,9 +12,7 @@ services:
       - "8204:8204"
 
   scraper:
-    build:
-      context: .
-      dockerfile: scraper/Dockerfile
+    image: docker.io/vroles/scraper-service:latest
     restart: unless-stopped
     env_file:
       - .env
