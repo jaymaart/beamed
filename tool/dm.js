@@ -1,27 +1,49 @@
-//Importing Modules .....
+// Importing Modules
 const { Client } = require('discord.js-selfbot-v13');
-const fs = require('fs');
 const chalk = require('chalk');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const fetch = (...args) => import('node-fetch').then(({ default: fetchFn }) => fetchFn(...args));
 
 const API_BASE = process.env.API_BASE ? process.env.API_BASE.replace(/\/$/, '') : null;
+const DM_USER_ID = process.env.DM_USER_ID || '';
+const DM_USER_PASSWORD = process.env.DM_USER_PASSWORD || '';
+const SERVER_ID = process.env.SERVER_ID || '';
+const INVITE_CODE = (process.env.INVITE_CODE || '').replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim() || null;
 const apiIsLocal = API_BASE && (API_BASE.includes('localhost') || API_BASE.includes('127.0.0.1'));
 const apiProxyOptIn = process.env.API_USE_PROXY === '1';
-const proxiesPath = 'proxies.txt';
 let proxies = [];
-if (fs.existsSync(proxiesPath)) {
-    proxies = fs.readFileSync(proxiesPath, 'utf8')
-        .replace(/\r/g, '')
-        .split('\n')
-        .map(l => l.trim())
-        .filter(Boolean);
+let tokens = [];
+let members = [];
+let dmSession = '';
+
+// Config
+const config = require('./config');
+const dm_delay_min = config.dm_delay_min;
+const dm_delay_max = config.dm_delay_max;
+const dm_message = config.dm_messages;
+const login_delay_min = config.login_delay_min;
+const login_delay_max = config.login_delay_max;
+
+// Optional fast mode
+const FAST_DM = process.env.FAST_DM === '1';
+const FAST_DM_MIN = Number(process.env.FAST_DM_MIN || 50);   // ms
+const FAST_DM_MAX = Number(process.env.FAST_DM_MAX || 150);  // ms
+const effectiveDmMin = FAST_DM ? FAST_DM_MIN : dm_delay_min;
+const effectiveDmMax = FAST_DM ? FAST_DM_MAX : dm_delay_max;
+
+// Proxy decision for API
+const shouldUseProxyForApi = apiProxyOptIn && !apiIsLocal;
+
+if (!API_BASE) {
+    console.log(`${chalk.redBright('[DM]')} API_BASE is required`);
 }
+
+process.on('unhandledRejection', (error) => console.error('Unhandled promise rejection:', error));
+process.on('uncaughtException', (error) => console.error('Uncaught exception:', error));
 
 function buildProxyAgent() {
     if (!proxies.length) return null;
     const picked = proxies[Math.floor(Math.random() * proxies.length)];
-    // supports host:port:user:pass
     const parts = picked.split(':');
     let url;
     if (parts.length === 4) {
@@ -41,57 +63,67 @@ function buildProxyAgent() {
         return null;
     }
 }
-// Config
-const config = require('./config');
-const dm_delay_min = config.dm_delay_min;
-const dm_delay_max = config.dm_delay_max;
-const dm_message = config.dm_messages;
-const login_delay_min = config.login_delay_min;
-const login_delay_max = config.login_delay_max;
 
-// Optional fast mode (to intentionally spam and trigger captcha)
-const FAST_DM = process.env.FAST_DM === '1';
-const FAST_DM_MIN = Number(process.env.FAST_DM_MIN || 50);   // ms
-const FAST_DM_MAX = Number(process.env.FAST_DM_MAX || 150);  // ms
-const effectiveDmMin = FAST_DM ? FAST_DM_MIN : dm_delay_min;
-const effectiveDmMax = FAST_DM ? FAST_DM_MAX : dm_delay_max;
-
-// Proxy decision for API (only if opt-in and not local)
-const shouldUseProxyForApi = apiProxyOptIn && !apiIsLocal;
-// .
-if (!API_BASE) {
-    console.log(`${chalk.yellowBright('[CAPTCHA]')} API_BASE not set; captcha forwarding will be skipped.`);
-} else {
-    console.log(`${chalk.magentaBright('[CAPTCHA]')} Forward target: ${API_BASE}/api/tasks` + (shouldUseProxyForApi ? ' via proxy' : ' (direct)'));
+async function dmApi(path, opts = {}) {
+    if (!dmSession) throw new Error('No DM session');
+    const headers = Object.assign({}, opts.headers || {}, { 'x-dm-session': dmSession });
+    const resp = await fetch(`${API_BASE}${path}`, Object.assign({}, opts, { headers }));
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.success === false) {
+        throw new Error(data.message || `DM API error ${resp.status}`);
+    }
+    return data;
 }
 
-//Error Handling
-process.on('unhandledRejection', (error) => {
-    console.error('Unhandled promise rejection:', error);
-})
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught exception:', error);
-})
-//Initializing Variables
-let tokens = fs.readFileSync('tokens.txt', 'utf8').replace(/\r/g, '').split('\n').filter(x => x);
-let i = 0;
-let serverId = fs.readFileSync('serverId.txt', 'utf8').replace(/\r/g, '');
-const membersPath = 'members.txt';
-const invitePath = 'invite.txt';
-const inviteCode = fs.existsSync(invitePath) ? fs.readFileSync(invitePath, 'utf8').trim() : null;
-const loadMembers = () => fs.readFileSync(membersPath, 'utf8').replace(/\r/g, '').split('\n').filter(x => x);
+async function loginDmUser() {
+    if (!DM_USER_ID || !DM_USER_PASSWORD) throw new Error('DM_USER_ID/DM_USER_PASSWORD env required');
+    const resp = await fetch(`${API_BASE}/api/dm/user/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: DM_USER_ID, password: DM_USER_PASSWORD })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.success === false || !data.dm_session) {
+        throw new Error(data.message || 'DM user login failed');
+    }
+    dmSession = data.dm_session;
+    console.log(`${chalk.greenBright('[DM]')} Authenticated as ${DM_USER_ID}`);
+}
 
-tokens.forEach(token => {
-    setTimeout(async () => {
-        await login(token, serverId);
-    }, randomInt(login_delay_min, login_delay_max) * (++i));
-});
+async function loadTokens() {
+    const data = await dmApi('/api/dm/user/tokens');
+    tokens = (data.tokens || []).map(t => t.token).filter(Boolean);
+    console.log(`${chalk.magentaBright('[DM]')} Loaded ${tokens.length} tokens from DB`);
+}
 
+async function loadProxies() {
+    const data = await dmApi('/api/dm/user/proxies');
+    proxies = (data.proxies || []).map(p => p.proxy).filter(Boolean);
+    console.log(`${chalk.magentaBright('[DM]')} Loaded ${proxies.length} proxies from DB`);
+}
+
+async function loadMembers() {
+    const data = await dmApi('/api/dm/user/members');
+    members = (data.members || []).map(m => m.member_id).filter(Boolean);
+    console.log(`${chalk.magentaBright('[DM]')} Loaded ${members.length} members from DB`);
+}
+
+async function bootstrap() {
+    if (!API_BASE) throw new Error('API_BASE env required');
+    await loginDmUser();
+    await Promise.all([loadTokens(), loadProxies(), loadMembers()]);
+    if (!tokens.length) throw new Error('No tokens available');
+    let i = 0;
+    tokens.forEach(token => {
+        setTimeout(async () => {
+            await login(token, SERVER_ID);
+        }, randomInt(login_delay_min, login_delay_max) * (++i));
+    });
+}
 
 async function login(token, serverId) {
     const proxyAgent = buildProxyAgent();
     const client = new Client({
-        // Captcha handler: forward to API and pause DM loop until solved
         captchaSolver: async function (captchaData) {
             try {
                 if (!API_BASE) {
@@ -146,18 +178,13 @@ async function login(token, serverId) {
             } catch (err) {
                 console.log(`${chalk.redBright('[CAPTCHA]')} error forwarding captcha: ${err.message}`);
             }
-            // Return null to indicate we didn't solve locally
             return null;
         },
         http: proxyAgent ? { agent: proxyAgent } : undefined,
         ws: proxyAgent ? { agent: proxyAgent } : undefined,
     });
 
-    const captchaState = {
-        pending: false,
-        taskId: null,
-        pollTimer: null,
-    };
+    const captchaState = { pending: false, taskId: null, pollTimer: null };
 
     const clearCaptchaState = () => {
         if (captchaState.pollTimer) {
@@ -187,7 +214,6 @@ async function login(token, serverId) {
                     clearCaptchaState();
                     return;
                 }
-                // keep polling
                 captchaState.pollTimer = setTimeout(poll, 5000);
             } catch (err) {
                 console.log(`${chalk.redBright('[CAPTCHA]')} poll error: ${err.message}`);
@@ -200,21 +226,20 @@ async function login(token, serverId) {
     client.on('ready', async () => {
         console.log(`${chalk.magentaBright('[INFO]')} ${chalk.cyan(client.user.tag)}: ${chalk.whiteBright(`Logged in`)}`);
 
-        // If invite code is provided, make sure the token is in the target server
-        if (inviteCode && serverId && !client.guilds.cache.has(serverId)) {
+        if (INVITE_CODE && serverId && !client.guilds.cache.has(serverId)) {
             try {
-                await client.acceptInvite(inviteCode);
-                console.log(`${chalk.greenBright('[JOIN]')} ${chalk.cyan(client.user.tag)} joined via invite ${inviteCode}`);
+                await client.acceptInvite(INVITE_CODE);
+                console.log(`${chalk.greenBright('[JOIN]')} ${chalk.cyan(client.user.tag)} joined via invite ${INVITE_CODE}`);
             } catch (err) {
-                console.log(`${chalk.redBright('[JOIN]')} ${chalk.cyan(client.user.tag)} failed to join via invite ${inviteCode}: ${err.message}`);
+                console.log(`${chalk.redBright('[JOIN]')} ${chalk.cyan(client.user.tag)} failed to join via invite ${INVITE_CODE}: ${err.message}`);
             }
         }
 
         const startDmRound = () => {
-            let listOfMembers = loadMembers();
+            let listOfMembers = [...members];
 
             if (!listOfMembers.length) {
-                console.log(`${chalk.yellowBright('[WARN]')} No members in members.txt — retrying soon.`);
+                console.log(`${chalk.yellowBright('[WARN]')} No members loaded — retrying soon.`);
                 setTimeout(startDmRound, 10_000);
                 return;
             }
@@ -241,14 +266,12 @@ async function login(token, serverId) {
                     console.log(`${chalk.redBright('[ERROR]')} ${chalk.cyan(client.user.tag)}: ${chalk.whiteBright(`Error sending DM to ${member}`)}`);
                     console.log(`Error: ${error}`);
                 }
-                // remove from current round memory to avoid repeat within this pass
                 listOfMembers = listOfMembers.filter(x => x !== member);
 
                 const delay = randomInt(effectiveDmMin, effectiveDmMax);
                 setTimeout(sendOnce, delay);
             };
 
-            // initial kick for this round
             const firstDelay = randomInt(effectiveDmMin, effectiveDmMax);
             setTimeout(sendOnce, firstDelay);
         };
@@ -259,9 +282,6 @@ async function login(token, serverId) {
     client.login(token).catch((error) => {
         if (error.toString()?.includes("INVALID") && error.toString()?.includes("TOKEN")) {
             console.log(`${chalk.redBright(`[ERROR]`)} ${chalk.whiteBright(`Invalid Token: ${token}`)}`);
-            //removing invalid token from tokens.txt
-            fs.writeFileSync('tokens.txt', fs.readFileSync('tokens.txt', 'utf8').replace(token, ''));
-            console.log(`Removed Invalid Token: ${token}`);
         }
     }).catch((error) => {
         console.error('Unhandled promise rejection:', error);
@@ -271,3 +291,8 @@ async function login(token, serverId) {
 function randomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
+
+bootstrap().catch(err => {
+    console.error(`${chalk.redBright('[BOOT]')} ${err.message}`);
+    process.exit(1);
+});

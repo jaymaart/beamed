@@ -119,6 +119,7 @@
             <h3>Member Scraper</h3>
             <div class="flex">
                 <input id="scrape-invite" placeholder="Invite URL or code">
+                <input id="scrape-channel" placeholder="Channel ID (optional)">
                 <button id="scrape-start">Scrape Members</button>
                 <button id="scrape-refresh">Refresh Members</button>
                 <button id="scrape-download">Download .txt</button>
@@ -389,6 +390,7 @@
 
         async function scrapeMembers() {
             const invite = document.getElementById('scrape-invite').value.trim();
+            const channelId = document.getElementById('scrape-channel').value.trim();
             if (!invite) {
                 logScrape('Invite required', 'error');
                 return;
@@ -397,7 +399,7 @@
                 const resp = await fetch('/api/dm/user/scrape-members', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
-                    body: JSON.stringify({ invite })
+                    body: JSON.stringify({ invite, channel_id: channelId || undefined })
                 });
                 const data = await resp.json();
                 if (!resp.ok || !data.success) {

@@ -2,7 +2,7 @@
   "name": "beamed-server",
   "version": "1.0.0",
   "private": true,
-  "description": "Minimal backend for Slashy admin and captcha solver flows",
+  "description": "Minimal backend for DMD admin and captcha solver flows",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

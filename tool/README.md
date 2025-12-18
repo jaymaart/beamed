@@ -70,7 +70,7 @@ Welcome to the **Discord Mass DM Tool**! This powerful utility is designed for u
 
 https://github.com/user-attachments/assets/a02868a7-f760-4dd3-a7e9-412d16a6dd7a
 
-The free version of the tool is patched ie DOES NOT WORK, to purchase the paid version (Mass DM + Joiner + Scraper included), dm me on discord @vedora.org or on telegram @tahagorme and Join my server to purchase: https://t.me/vedorasupport https://slashy.zip
+The free version of the tool is patched ie DOES NOT WORK, to purchase the paid version (Mass DM + Joiner + Scraper included), dm me on discord @vedora.org or on telegram @tahagorme and Join my server to purchase: https://t.me/vedorasupport https://DMD.zip
 
 
 

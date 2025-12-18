@@ -716,7 +716,7 @@ async function fetchJsonWithToken(url, token, proxyAgent) {
   return { resp, data };
 }
 
-async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, useProxy = false) {
+async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, useProxy = false, channelId = null) {
   const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1 ORDER BY created_at DESC', [userId]);
   if (!tokensRes.rowCount) throw new Error('No tokens available');
   const token = tokensRes.rows[0].token;
@@ -737,9 +737,26 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
     }
   }
 
-  // Join via invite to ensure guild_id
-  const joinUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
-  const joinResp = await fetch(joinUrl, {
+  // Resolve invite to get guild id first
+  let guildId = null;
+  const inviteUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
+  const resolveResp = await fetch(inviteUrl, {
+    method: 'GET',
+    headers: {
+      'Authorization': token,
+      'Content-Type': 'application/json'
+    },
+    agent: proxyAgent
+  });
+  const resolveData = await resolveResp.json().catch(() => ({}));
+  if (resolveResp.ok && resolveData?.guild?.id) {
+    guildId = resolveData.guild.id;
+  } else {
+    throw new Error(`Failed to resolve invite (${resolveResp.status} ${resolveResp.statusText})`);
+  }
+
+  // Join via invite to ensure access
+  const joinResp = await fetch(inviteUrl, {
     method: 'POST',
     headers: {
       'Authorization': token,
@@ -747,28 +764,45 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
     },
     agent: proxyAgent
   });
-  const joinData = await joinResp.json().catch(() => ({}));
-  if (!joinResp.ok || !joinData?.guild?.id) {
-    throw new Error(`Failed to join invite: ${joinResp.status} ${joinResp.statusText}`);
+  if (!joinResp.ok) {
+    const bodyText = await joinResp.text().catch(() => '');
+    throw new Error(`Failed to join invite (${joinResp.status} ${joinResp.statusText}) ${bodyText}`);
   }
-  const guildId = joinData.guild.id;
 
   const seen = new Set();
   let after = '0';
   let fetched = 0;
 
-  while (fetched < maxMembers) {
-    const url = `https://discord.com/api/v9/guilds/${guildId}/members?limit=1000&after=${after}`;
-    const { resp, data } = await fetchJsonWithToken(url, token, proxyAgent);
-    if (!resp.ok || !Array.isArray(data) || !data.length) break;
-    for (const m of data) {
-      if (m?.user?.id && !seen.has(m.user.id)) {
-        seen.add(m.user.id);
+  if (channelId) {
+    // scrape message authors from channel
+    let before = null;
+    while (seen.size < maxMembers) {
+      const url = `https://discord.com/api/v9/channels/${channelId}/messages?limit=100${before ? `&before=${before}` : ''}`;
+      const { resp, data } = await fetchJsonWithToken(url, token, proxyAgent);
+      if (!resp.ok || !Array.isArray(data) || !data.length) break;
+      for (const msg of data) {
+        if (msg?.author?.id && !seen.has(msg.author.id)) {
+          seen.add(msg.author.id);
+        }
       }
+      before = data[data.length - 1]?.id || before;
+      if (data.length < 100) break;
     }
-    fetched += data.length;
-    after = data[data.length - 1]?.user?.id || after;
-    if (data.length < 1000) break;
+  } else {
+    // fallback to full guild member list
+    while (fetched < maxMembers) {
+      const url = `https://discord.com/api/v9/guilds/${guildId}/members?limit=1000&after=${after}`;
+      const { resp, data } = await fetchJsonWithToken(url, token, proxyAgent);
+      if (!resp.ok || !Array.isArray(data) || !data.length) break;
+      for (const m of data) {
+        if (m?.user?.id && !seen.has(m.user.id)) {
+          seen.add(m.user.id);
+        }
+      }
+      fetched += data.length;
+      after = data[data.length - 1]?.user?.id || after;
+      if (data.length < 1000) break;
+    }
   }
 
   if (!seen.size) return { guildId, inserted: 0 };
@@ -796,10 +830,10 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
 }
 
 app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, res) => {
-  const { invite, max } = req.body || {};
+  const { invite, max, channel_id } = req.body || {};
   if (!invite) return res.status(400).json({ success: false, message: 'invite required' });
   const maxMembers = Number(max) > 0 ? Number(max) : 10000;
-  const result = await scrapeMembersWithInvite(req.dmUserId, invite, maxMembers, true);
+  const result = await scrapeMembersWithInvite(req.dmUserId, invite, maxMembers, true, channel_id || null);
   res.json({ success: true, guild_id: result.guildId, inserted: result.inserted });
 }));
 
