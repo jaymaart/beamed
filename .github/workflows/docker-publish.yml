@@ -59,7 +59,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_SECRETS }}
+          password: ${{ secrets.DOCKER_SECRET }}
 
       # Extract metadata (tags, labels) for Docker
       # https://github.com/docker/metadata-action
