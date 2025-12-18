@@ -2,18 +2,21 @@ services:
   app:
     image: docker.io/vroles/solver-service:latest
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      PORT: 8204
+      ADMIN_PASSWORD: changeme
+      SOLVER_PASSWORD: solver
+      DATABASE_URL: postgres://solver:solver25@192.168.1.11:5432/solver-service
+      ALLOWED_ORIGINS: https://dmdservers.com
     ports:
-      - "${PORT:-8000}:${PORT:-8000}"
+      - "8204:8204"
 
   scraper:
     build:
       context: .
       dockerfile: scraper/Dockerfile
-    restart: "no"
+    restart: unless-stopped
     env_file:
       - .env
     ports:
       - "${SCRAPER_PORT:-8600}:8600"
-

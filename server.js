@@ -727,39 +727,23 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
   inviteCode = inviteCode.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
   if (!inviteCode) throw new Error('Invite code required');
 
+  const inviteUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
+  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://localhost:8600/scrape';
+
   for (const tok of tokenList) {
     try {
-      const result = await new Promise((resolve, reject) => {
-        const py = spawn('python', [
-          path.join(__dirname, 'scraper', 'scrape_members.py'),
-          tok,
-          inviteCode
-        ]);
-
-        let stdout = '';
-        let stderr = '';
-
-        py.stdout.on('data', (data) => stdout += data.toString());
-        py.stderr.on('data', (data) => stderr += data.toString());
-
-        py.on('close', (code) => {
-          if (code !== 0) {
-            // Try to parse error from stdout if present (as we print json there too)
-            try {
-                const errJson = JSON.parse(stdout);
-                if (errJson.error) return reject(new Error(errJson.error));
-            } catch {}
-            return reject(new Error(stderr || `Python script exited with code ${code}`));
-          }
-          try {
-            const data = JSON.parse(stdout);
-            if (data.error) reject(new Error(data.error));
-            else resolve(data);
-          } catch (e) {
-            reject(new Error(`Failed to parse Python output: ${e.message}\nStdout: ${stdout}`));
-          }
-        });
+      // Call the scraper service
+      const scrapeResp = await fetch(scraperUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tok, invite: inviteCode })
       });
+      
+      const result = await scrapeResp.json().catch(() => ({}));
+      
+      if (!scrapeResp.ok || !result.success) {
+          throw new Error(result.error || `Scraper service error: ${scrapeResp.status}`);
+      }
 
       if (result.success) {
          // Insert into DB
