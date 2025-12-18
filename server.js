@@ -8,6 +8,7 @@ const { Pool } = require('pg');
 // Config
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
 const SOLVER_PASSWORD = process.env.SOLVER_PASSWORD || 'solver';
+const API_BASE = process.env.API_BASE ? process.env.API_BASE.replace(/\/$/, '') : "http://localhost:8000";
 const PORT = process.env.PORT || 8000;
 const FIVE_MINUTES = 5 * 60 * 1000;
 const CAPTCHA_TIMEOUT_MS = 150 * 1000; // 2.5 minutes
@@ -719,7 +720,7 @@ async function fetchJsonWithToken(url, token, proxyAgent) {
 async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, useProxy = false, channelId = null) {
   const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1 ORDER BY created_at DESC', [userId]);
   if (!tokensRes.rowCount) throw new Error('No tokens available');
-  const token = tokensRes.rows[0].token;
+  const tokenList = tokensRes.rows.map(r => r.token).filter(Boolean);
 
   let inviteCode = invite || '';
   inviteCode = inviteCode.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
@@ -737,36 +738,105 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
     }
   }
 
-  // Resolve invite to get guild id first
   let guildId = null;
+  let workingToken = null;
+
   const inviteUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
-  const resolveResp = await fetch(inviteUrl, {
-    method: 'GET',
-    headers: {
-      'Authorization': token,
-      'Content-Type': 'application/json'
-    },
-    agent: proxyAgent
-  });
-  const resolveData = await resolveResp.json().catch(() => ({}));
-  if (resolveResp.ok && resolveData?.guild?.id) {
+
+  for (const tok of tokenList) {
+    // Resolve invite to get guild id first
+    const resolveResp = await fetch(inviteUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': tok
+      },
+      agent: proxyAgent
+    });
+    const resolveData = await resolveResp.json().catch(() => ({}));
+    if (!(resolveResp.ok && resolveData?.guild?.id)) {
+      continue; // try next token
+    }
     guildId = resolveData.guild.id;
-  } else {
-    throw new Error(`Failed to resolve invite (${resolveResp.status} ${resolveResp.statusText})`);
+
+    // Join via invite to ensure access
+    const doJoin = async (body) => {
+      const resp = await fetch(inviteUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': tok,
+          ...(body ? { 'Content-Type': 'application/json' } : {})
+        },
+        agent: proxyAgent,
+        body: body ? JSON.stringify(body) : undefined
+      });
+      return resp;
+    };
+
+    let joinResp = await doJoin();
+    if (!joinResp.ok) {
+      const bodyText = await joinResp.text().catch(() => '');
+      let joinJson = {};
+      try { joinJson = JSON.parse(bodyText); } catch (_) { joinJson = {}; }
+
+      // Captcha flow
+      if (joinResp.status === 400 && joinJson?.captcha_sitekey) {
+        const siteKey = joinJson.captcha_sitekey;
+        const rqdata = joinJson.captcha_rqdata || joinJson.captcha_rqtoken || joinJson.rqdata || null;
+        const captchaService = joinJson.captcha_service || 'hcaptcha';
+        if (!API_BASE) throw new Error('API_BASE not set for captcha solve');
+
+        // forward captcha
+        const taskResp = await fetch(`${API_BASE}/api/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteKey, rqdata, captcha_service: captchaService, raw: joinJson })
+        });
+        const taskData = await taskResp.json().catch(() => ({}));
+        if (!taskResp.ok || !taskData.success || !taskData.task?.id) {
+          throw new Error(`Failed to forward captcha for join (${taskResp.status})`);
+        }
+        const taskId = taskData.task.id;
+
+        // poll for solve
+        let solvedToken = null;
+        const deadline = Date.now() + 120000; // 2 minutes
+        while (!solvedToken && Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 4000));
+          const res = await fetch(`${API_BASE}/api/task-result?taskId=${encodeURIComponent(taskId)}`);
+          const data = await res.json().catch(() => ({}));
+          if (data.success && data.status === 'solved' && data.token) {
+            solvedToken = data.token;
+            break;
+          }
+        }
+        if (!solvedToken) throw new Error('Captcha solve timeout for invite join');
+
+        // retry join with captcha solution
+        joinResp = await doJoin({
+          captcha_key: solvedToken,
+          captcha_rqtoken: joinJson.captcha_rqtoken
+        });
+        if (!joinResp.ok) {
+          const retryText = await joinResp.text().catch(() => '');
+          let retryJson = {};
+          try { retryJson = JSON.parse(retryText); } catch (_) { retryJson = {}; }
+          throw new Error(`Failed to join invite after captcha (${joinResp.status} ${joinResp.statusText}) ${retryText}`);
+        }
+      } else {
+        // if unauthorized, try next token
+        if (joinResp.status === 401 || joinResp.status === 403) {
+          continue;
+        }
+        throw new Error(`Failed to join invite (${joinResp.status} ${joinResp.statusText}) ${bodyText}`);
+      }
+    }
+
+    workingToken = tok;
+    break;
   }
 
-  // Join via invite to ensure access
-  const joinResp = await fetch(inviteUrl, {
-    method: 'POST',
-    headers: {
-      'Authorization': token,
-      'Content-Type': 'application/json'
-    },
-    agent: proxyAgent
-  });
-  if (!joinResp.ok) {
-    const bodyText = await joinResp.text().catch(() => '');
-    throw new Error(`Failed to join invite (${joinResp.status} ${joinResp.statusText}) ${bodyText}`);
+  if (!workingToken || !guildId) {
+    throw new Error('Failed to resolve/join invite with available tokens (401/403).');
   }
 
   const seen = new Set();
@@ -778,7 +848,7 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
     let before = null;
     while (seen.size < maxMembers) {
       const url = `https://discord.com/api/v9/channels/${channelId}/messages?limit=100${before ? `&before=${before}` : ''}`;
-      const { resp, data } = await fetchJsonWithToken(url, token, proxyAgent);
+      const { resp, data } = await fetchJsonWithToken(url, workingToken, proxyAgent);
       if (!resp.ok || !Array.isArray(data) || !data.length) break;
       for (const msg of data) {
         if (msg?.author?.id && !seen.has(msg.author.id)) {
@@ -792,7 +862,7 @@ async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, usePr
     // fallback to full guild member list
     while (fetched < maxMembers) {
       const url = `https://discord.com/api/v9/guilds/${guildId}/members?limit=1000&after=${after}`;
-      const { resp, data } = await fetchJsonWithToken(url, token, proxyAgent);
+      const { resp, data } = await fetchJsonWithToken(url, workingToken, proxyAgent);
       if (!resp.ok || !Array.isArray(data) || !data.length) break;
       for (const m of data) {
         if (m?.user?.id && !seen.has(m.user.id)) {
