@@ -1,0 +1,1535 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Slashy Captcha Solver</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        :root {
+            --background: #121212;
+            --surface: #1e1e1e;
+            --primary: #bb86fc;
+            --on-primary: #000000;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --error: #f44336;
+            --info: #2196f3;
+            --spacing-sm: 8px;
+            --spacing-md: 16px;
+            --spacing-lg: 24px;
+            --font-size-xs: 12px;
+            --font-size-sm: 14px;
+            --font-size-md: 16px;
+            --font-size-lg: 24px;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            padding: var(--spacing-md);
+            margin: 0;
+            background-color: var(--background);
+            color: rgba(255, 255, 255, 0.87);
+            line-height: 1.6;
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior: none;
+        }
+
+        #container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: var(--spacing-md);
+            display: block;
+        }
+
+        .app-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+            margin-bottom: var(--spacing-lg);
+            flex-wrap: wrap;
+        }
+
+        .app-header h1 {
+            margin: 0;
+            font-weight: 400;
+            font-size: var(--font-size-lg);
+        }
+
+        .app-icon {
+            color: var(--primary);
+        }
+
+        .app-icon i {
+            font-size: 32px;
+        }
+
+        #status {
+            padding: 16px;
+            margin-bottom: 24px;
+            font-size: 14px;
+            border-radius: 4px;
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .task-count {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.6);
+            margin-left: auto;
+        }
+
+        .captcha-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            grid-gap: var(--spacing-md);
+        }
+
+        .captcha-card {
+            background-color: var(--surface);
+            border-radius: 8px;
+            padding: var(--spacing-md);
+            position: relative;
+            transition: all 0.2s ease;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            overflow: visible;
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            touch-action: manipulation;
+        }
+
+        .captcha-card:hover {
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .captcha-card.solved {
+            border-left: 3px solid var(--success);
+        }
+
+        .captcha-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .captcha-info {
+            margin-bottom: 0;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .reset-button {
+            padding: 0 !important;
+            width: 32px !important;
+            height: 32px !important;
+            min-width: 32px !important;
+            min-height: 32px !important;
+            max-width: 32px !important;
+            max-height: 32px !important;
+            border-radius: 50% !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            flex-shrink: 0 !important;
+            box-sizing: border-box !important;
+            overflow: hidden !important;
+            line-height: 1 !important;
+        }
+
+        .reset-button i {
+            margin: 0 !important;
+            padding: 0 !important;
+            font-size: 16px !important;
+            display: block !important;
+        }
+
+        .success-message {
+            color: var(--success);
+        }
+
+        .warning-message {
+            color: var(--warning);
+        }
+
+        .error-message {
+            color: var(--error);
+        }
+
+        button {
+            padding: var(--spacing-sm) var(--spacing-md);
+            background-color: var(--primary);
+            color: var(--on-primary);
+            border: none;
+            border-radius: 4px;
+            font-size: var(--font-size-sm);
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: background-color 0.2s ease, box-shadow 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            box-shadow: none;
+            touch-action: manipulation;
+            min-height: 44px;
+            /* Improved touch target size */
+        }
+
+        button:hover {
+            background-color: #d8b8ff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active {
+            background-color: #9965f4;
+        }
+
+        button:disabled {
+            background-color: rgba(187, 134, 252, 0.3);
+            color: rgba(0, 0, 0, 0.38);
+            cursor: not-allowed;
+        }
+
+        .h-captcha iframe {
+            filter: invert(1) hue-rotate(180deg);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .ripple {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .ripple:after {
+            content: "";
+            display: block;
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            background-image: radial-gradient(circle, #fff 10%, transparent 10.01%);
+            background-repeat: no-repeat;
+            background-position: 50%;
+            transform: scale(10, 10);
+            opacity: 0;
+            transition: transform .5s, opacity 1s;
+        }
+
+        .ripple:active:after {
+            transform: scale(0, 0);
+            opacity: 0.3;
+            transition: 0s;
+        }
+
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 16px;
+            gap: 4px;
+        }
+
+        .connection-status.connected {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+
+        .connection-status.disconnected {
+            background-color: rgba(244, 67, 54, 0.2);
+            color: var(--error);
+        }
+
+        .connection-status.connecting {
+            background-color: rgba(255, 152, 0, 0.2);
+            color: var(--warning);
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 0.6;
+            }
+
+            50% {
+                opacity: 1;
+            }
+
+            100% {
+                opacity: 0.6;
+            }
+        }
+
+        .connecting .material-icons {
+            animation: pulse 1.5s infinite;
+        }
+
+        /* Enhanced responsive design */
+        @media (max-width: 768px) {
+            :root {
+                --spacing-md: 12px;
+                --spacing-lg: 20px;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .task-count {
+                margin-left: 0;
+                margin-top: var(--spacing-sm);
+            }
+
+            .captcha-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .connection-status {
+                margin-left: 0;
+                margin-top: var(--spacing-sm);
+            }
+
+            .app-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: var(--spacing-sm);
+            }
+
+            .app-header h1 {
+                font-size: 20px;
+            }
+        }
+
+        @media (max-width: 500px) {
+            :root {
+                --spacing-sm: 6px;
+                --spacing-md: 10px;
+                --font-size-sm: 13px;
+            }
+
+            .captcha-grid {
+                grid-template-columns: 1fr;
+            }
+
+            #container {
+                padding: var(--spacing-sm);
+            }
+
+            body {
+                padding: var(--spacing-sm);
+            }
+
+            .h-captcha {
+                transform: scale(0.9);
+                transform-origin: left top;
+            }
+
+            button {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .app-icon i {
+                font-size: 24px;
+            }
+        }
+
+        /* Improved touch experience for mobile */
+        @media (hover: none) {
+            button {
+                padding: var(--spacing-md);
+            }
+
+            .captcha-card {
+                margin-bottom: var(--spacing-md);
+            }
+
+            /* Increase space between interactive elements but maintain round shape */
+            .reset-button {
+                width: 44px !important;
+                height: 44px !important;
+                min-width: 44px !important;
+                min-height: 44px !important;
+                max-width: 44px !important;
+                max-height: 44px !important;
+            }
+        }
+
+        /* New styles for worker stats */
+        .stats-panel {
+            background-color: var(--surface);
+            border-radius: 8px;
+            padding: var(--spacing-md);
+            margin-bottom: var(--spacing-lg);
+        }
+
+        .stats-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-md);
+        }
+
+        .stats-title {
+            font-size: var(--font-size-md);
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.87);
+            margin: 0;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            grid-gap: var(--spacing-md);
+        }
+
+        .stat-card {
+            padding: var(--spacing-md);
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: var(--font-size-lg);
+            font-weight: 500;
+            margin-bottom: var(--spacing-sm);
+            color: var(--primary);
+        }
+
+        .stat-label {
+            font-size: var(--font-size-sm);
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .worker-name-display {
+            color: var(--primary);
+            font-weight: 500;
+            font-size: var(--font-size-sm);
+            padding: 8px 12px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        /* Remove the now unused worker-name-input styles */
+        /* .worker-name-input {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.87);
+            border: none;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: var(--font-size-sm);
+            max-width: 200px;
+        }
+
+        .worker-name-input:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px var(--primary);
+        } */
+
+        .worker-id {
+            font-size: var(--font-size-xs);
+            color: rgba(255, 255, 255, 0.5);
+            margin-left: var(--spacing-sm);
+        }
+
+        .worker-list-container {
+            margin-top: var(--spacing-md);
+        }
+
+        .worker-list-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--spacing-sm) var(--spacing-md);
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .worker-list-toggle-title {
+            font-size: var(--font-size-sm);
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.87);
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+        }
+
+        .worker-list-toggle-icon {
+            transition: transform 0.3s ease;
+        }
+
+        .worker-list-toggle-icon.collapsed {
+            transform: rotate(-90deg);
+        }
+
+        .worker-list {
+            margin-top: var(--spacing-sm);
+            background-color: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+            max-height: 300px;
+            transition: max-height 0.3s ease, opacity 0.3s ease;
+            opacity: 1;
+        }
+
+        .worker-list.collapsed {
+            max-height: 0;
+            opacity: 0;
+            margin-top: 0;
+        }
+
+        .worker-list-header {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            grid-gap: var(--spacing-md);
+            padding: var(--spacing-sm) var(--spacing-md);
+            font-size: var(--font-size-xs);
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.6);
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .worker-item {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            grid-gap: var(--spacing-md);
+            padding: var(--spacing-sm) var(--spacing-md);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .worker-item:last-child {
+            border-bottom: none;
+        }
+
+        .highlight {
+            color: var(--primary);
+            font-weight: 500;
+        }
+
+        .status-pill {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-active {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--success);
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .worker-list-header,
+            .worker-item {
+                grid-template-columns: 1fr auto;
+                grid-gap: var(--spacing-md);
+            }
+
+            .worker-list-header div:nth-child(3),
+            .worker-item div:nth-child(3) {
+                display: none;
+            }
+        }
+
+        @media (max-width: 500px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div class="app-header">
+            <div class="app-icon">
+                <i class="material-icons">security</i>
+            </div>
+            <h1>Slashy Captcha Solver</h1>
+            <div id="connection-status" class="connection-status disconnected">
+                <i class="material-icons" style="font-size: 14px;">wifi_off</i>
+                <span>Disconnected</span>
+            </div>
+        </div>
+
+        <div class="stats-panel">
+            <div class="stats-header">
+                <div class="worker-info">
+                    <span id="worker-name-display" class="worker-name-display"></span>
+                    <span class="worker-id" id="worker-id"></span>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="solved-count">0</div>
+                    <div class="stat-label">Solved by you</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="active-workers">0</div>
+                    <div class="stat-label">Active workers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="pending-tasks">0</div>
+                    <div class="stat-label">Your assigned tasks</div>
+                </div>
+            </div>
+
+            <div class="worker-list-container">
+                <div class="worker-list-toggle" id="worker-list-toggle">
+                    <div class="worker-list-toggle-title">
+                        <i class="material-icons" style="font-size: 18px;">people</i>
+                        Active Workers
+                    </div>
+                    <i class="material-icons worker-list-toggle-icon collapsed"
+                        id="worker-list-toggle-icon">keyboard_arrow_down</i>
+                </div>
+                <div class="worker-list collapsed" id="worker-list">
+                    <div class="worker-list-header">
+                        <div>Worker</div>
+                        <div>Solved</div>
+                        <div>Status</div>
+                    </div>
+                    <!-- Worker items will be added here dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <div id="status">Connecting to server...</div>
+
+        <div class="controls">
+            <button id="refresh-btn" class="ripple">
+                <i class="material-icons" style="font-size: 16px;">refresh</i>
+                Refresh
+            </button>
+
+            <span class="task-count" id="task-count">No pending tasks</span>
+        </div>
+
+        <div class="captcha-grid" id="captcha-grid">
+        </div>
+        <div class="pagination" id="captcha-pagination" style="display: flex; gap: 8px; align-items: center; margin-top: 12px;">
+            <button class="ripple" id="captcha-prev">Prev</button>
+            <span id="captcha-page-info" style="font-size: 14px; color: rgba(255,255,255,0.8);"></span>
+            <button class="ripple" id="captcha-next">Next</button>
+        </div>
+    </div>
+
+    <script>
+        // Generate a unique session ID for this worker if not already present
+        function getWorkerId() {
+            let workerId = localStorage.getItem('captchaWorkerSessionId');
+            if (!workerId) {
+                workerId = 'worker-' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+                localStorage.setItem('captchaWorkerSessionId', workerId);
+            }
+            return workerId;
+        }
+
+        // Random name generator lists
+        const adjectives = [
+            "Swift", "Brave", "Clever", "Silent", "Mighty", "Gentle", "Noble", "Calm",
+            "Wild", "Bold", "Fierce", "Nimble", "Wise", "Daring", "Loyal", "Majestic",
+            "Proud", "Rare", "Free", "Keen", "Bright", "Agile", "Sharp", "Sleek"
+        ];
+
+        const animals = [
+            "Fox", "Eagle", "Wolf", "Bear", "Owl", "Tiger", "Falcon", "Deer",
+            "Lion", "Hawk", "Panther", "Lynx", "Raven", "Badger", "Puma", "Dolphin",
+            "Jaguar", "Otter", "Beaver", "Bison", "Moose", "Mustang", "Raccoon", "Koala"
+        ];
+
+        // Generate a random animal name
+        function generateRandomName() {
+            const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+            const animal = animals[Math.floor(Math.random() * animals.length)];
+            return `${adjective} ${animal}`;
+        }
+
+        // Get/set worker name from local storage
+        function getWorkerName() {
+            let name = localStorage.getItem('captchaWorkerName');
+            if (!name) {
+                name = generateRandomName();
+                localStorage.setItem('captchaWorkerName', name);
+            }
+            return name;
+        }
+
+        function setWorkerName(name) {
+            localStorage.setItem('captchaWorkerName', name);
+        }
+
+        // Device information detection
+        function getDeviceInfo() {
+            const userAgent = navigator.userAgent;
+            const platform = navigator.platform;
+
+            // Browser detection
+            let browser = "Unknown";
+            let browserVersion = "";
+
+            // OS detection
+            let os = "Unknown";
+
+            // Device type detection
+            let deviceType = "Desktop";
+            let deviceModel = "Unknown";
+
+            // Browser detection
+            if (userAgent.includes("Firefox/")) {
+                browser = "Firefox";
+                browserVersion = userAgent.split("Firefox/")[1].split(" ")[0];
+            } else if (userAgent.includes("Chrome/") && !userAgent.includes("Edg/")) {
+                browser = "Chrome";
+                browserVersion = userAgent.split("Chrome/")[1].split(" ")[0];
+            } else if (userAgent.includes("Safari/") && !userAgent.includes("Chrome/")) {
+                browser = "Safari";
+                if (userAgent.includes("Version/")) {
+                    browserVersion = userAgent.split("Version/")[1].split(" ")[0];
+                }
+            } else if (userAgent.includes("Edg/")) {
+                browser = "Edge";
+                browserVersion = userAgent.split("Edg/")[1].split(" ")[0];
+            } else if (userAgent.includes("OPR/") || userAgent.includes("Opera/")) {
+                browser = "Opera";
+                if (userAgent.includes("OPR/")) {
+                    browserVersion = userAgent.split("OPR/")[1].split(" ")[0];
+                } else {
+                    browserVersion = userAgent.split("Opera/")[1].split(" ")[0];
+                }
+            } else if (userAgent.includes("MSIE ") || userAgent.includes("Trident/")) {
+                browser = "Internet Explorer";
+                if (userAgent.includes("MSIE ")) {
+                    browserVersion = userAgent.split("MSIE ")[1].split(";")[0];
+                } else {
+                    browserVersion = userAgent.split("rv:")[1].split(")")[0];
+                }
+            }
+
+            // OS detection
+            if (userAgent.includes("Windows")) {
+                os = "Windows";
+                if (userAgent.includes("Windows NT 10.0")) os += " 10";
+                else if (userAgent.includes("Windows NT 6.3")) os += " 8.1";
+                else if (userAgent.includes("Windows NT 6.2")) os += " 8";
+                else if (userAgent.includes("Windows NT 6.1")) os += " 7";
+                else if (userAgent.includes("Windows NT 6.0")) os += " Vista";
+                else if (userAgent.includes("Windows NT 5.1")) os += " XP";
+            } else if (userAgent.includes("Mac OS X")) {
+                os = "macOS";
+                const macVersion = userAgent.match(/Mac OS X (\d+[._]\d+[._]?\d*)/);
+                if (macVersion) {
+                    os += " " + macVersion[1].replace(/_/g, '.');
+                }
+            } else if (userAgent.includes("Linux")) {
+                os = "Linux";
+            } else if (userAgent.includes("Android")) {
+                os = "Android";
+                const androidVersion = userAgent.match(/Android (\d+[._]\d+[._]?\d*)/);
+                if (androidVersion) {
+                    os += " " + androidVersion[1];
+                }
+            } else if (userAgent.includes("iOS") || userAgent.includes("iPhone") || userAgent.includes("iPad")) {
+                os = "iOS";
+                const iosVersion = userAgent.match(/OS (\d+[._]\d+[._]?\d*)/);
+                if (iosVersion) {
+                    os += " " + iosVersion[1].replace(/_/g, '.');
+                }
+            }
+
+            // Device type and model detection
+            if (userAgent.includes("Mobile") ||
+                userAgent.includes("Android") && userAgent.includes("wv") ||
+                userAgent.includes("iPhone") ||
+                userAgent.includes("iPad")) {
+                deviceType = "Mobile";
+
+                // Try to detect mobile model
+                if (userAgent.includes("iPhone")) {
+                    deviceModel = "iPhone";
+                } else if (userAgent.includes("iPad")) {
+                    deviceModel = "iPad";
+                } else if (userAgent.includes("Android")) {
+                    // Extract model from Android devices
+                    const modelMatch = userAgent.match(/;\s([^;]+)\sBuild\//);
+                    if (modelMatch) {
+                        deviceModel = modelMatch[1].trim();
+                    } else {
+                        // Try alternative pattern
+                        const altModelMatch = userAgent.match(/;\s([^;]+)\s\)/);
+                        if (altModelMatch) {
+                            deviceModel = altModelMatch[1].trim();
+                        }
+                    }
+                }
+            } else {
+                // For desktop, use the platform as model
+                deviceModel = platform;
+            }
+
+            return {
+                browser: browser,
+                browserVersion: browserVersion,
+                os: os,
+                deviceType: deviceType,
+                deviceModel: deviceModel
+            };
+        }
+
+        const originalCreateElement = document.createElement;
+        document.createElement = function (tag) {
+            const element = originalCreateElement.call(document, tag);
+
+            if (tag.toLowerCase() === 'iframe') {
+                // Add a mutation observer to catch when src is set
+                const observer = new MutationObserver((mutations) => {
+                    mutations.forEach((mutation) => {
+                        if (mutation.attributeName === 'src') {
+                            const src = element.src;
+                            //
+                            if (src && src.includes('hcaptcha') && src.includes('origin=') && !src.includes('e2f713c5-b5ce-41d0-b65f-29823df542cf.react-native.hcaptcha.com')) {
+                                // replace host and origin with https://e2f713c5-b5ce-41d0-b65f-29823df542cf.react-native.hcaptcha.com
+                                let newSrc = src.replace(/origin=[^&]*/, 'origin=https://e2f713c5-b5ce-41d0-b65f-29823df542cf.react-native.hcaptcha.com');
+                                newSrc = newSrc.replace(/host=[^&]*/, 'host=e2f713c5-b5ce-41d0-b65f-29823df542cf.react-native.hcaptcha.com');
+
+                                // update the src attribute
+                                element.src = newSrc;
+
+                                // also update the src attribute of the iframe
+                                const iframe = document.querySelector(`iframe[src="${src}"]`);
+                                if (iframe) {
+                                    iframe.src = newSrc;
+                                    console.log(`Updated iframe src: ${newSrc}`);
+                                }
+                            }
+                        }
+                    });
+                });
+
+                observer.observe(element, { attributes: true });
+            }
+
+            return element;
+        };
+        const captchaWidgets = new Map();
+        const solvedTokens = new Map();
+        let wsConnection = null;
+        let isManualRefresh = false;
+        let lastTaskCount = 0;
+        let lastStatusMessage = '';
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+        const TASK_PAGE_SIZE = 5;
+        let taskPage = 1;
+        let assignedTasks = [];
+
+        const STORAGE_KEYS = {
+            solverSession: 'solverSessionId',
+            workerId: 'solverWorkerId',
+            workerName: 'solverWorkerName'
+        };
+
+        // Worker information
+        let solverSessionId = localStorage.getItem(STORAGE_KEYS.solverSession) || '';
+        let workerId = localStorage.getItem(STORAGE_KEYS.workerId) || '';
+        let workerName = localStorage.getItem(STORAGE_KEYS.workerName) || '';
+        let workerInfo = null;
+        let activeWorkers = [];
+
+        function connectWebSocket() {
+            updateConnectionStatus('connecting');
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const deviceInfo = encodeURIComponent(JSON.stringify(getDeviceInfo()));
+            const wsUrl = `${protocol}//${window.location.host}?workerId=${encodeURIComponent(workerId)}&solverSession=${encodeURIComponent(solverSessionId)}&name=${encodeURIComponent(workerName)}&deviceInfo=${deviceInfo}`;
+            wsConnection = new WebSocket(wsUrl);
+
+            wsConnection.addEventListener('open', () => {
+                console.log('Connected to WebSocket server');
+                updateConnectionStatus('connected');
+                updateStatus('Connected to server', 'success');
+                reconnectAttempts = 0;
+            });
+
+            wsConnection.addEventListener('message', (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'tasks') {
+                        handleTasksUpdate(data.tasks);
+                    } else if (data.type === 'worker_info') {
+                        handleWorkerInfo(data.worker);
+                    } else if (data.type === 'worker_stats') {
+                        handleWorkerStats(data.stats, data.active_workers);
+                    }
+                } catch (error) {
+                    console.error('Error processing WebSocket message:', error);
+                }
+            });
+
+            wsConnection.addEventListener('close', () => {
+                console.log('Disconnected from WebSocket server');
+                updateConnectionStatus('disconnected');
+                updateStatus('Connection lost. Attempting to reconnect...', 'warning');
+
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    setTimeout(connectWebSocket, 2000 * reconnectAttempts);
+                } else {
+                    updateStatus('Could not reconnect to server. Please refresh the page.', 'error');
+                }
+            });
+
+            wsConnection.addEventListener('error', (error) => {
+                console.error('WebSocket error:', error);
+                updateStatus('Connection error', 'error');
+            });
+        }
+
+        function handleWorkerInfo(worker) {
+            workerInfo = worker;
+
+            // Update UI with worker info
+            document.getElementById('worker-id').textContent = `#${worker.id.substring(0, 6)}`;
+            document.getElementById('solved-count').textContent = worker.solved_count;
+
+            // Update displayed name
+            const nameDisplay = document.getElementById('worker-name-display');
+            nameDisplay.textContent = worker.name || workerName;
+        }
+
+        function handleWorkerStats(stats, activeWorkerCount) {
+            activeWorkers = stats || [];
+
+            // Update active workers count
+            document.getElementById('active-workers').textContent = activeWorkerCount || activeWorkers.length;
+
+            // Update worker list
+            updateWorkerList(activeWorkers);
+        }
+
+        function updateWorkerList(workers) {
+            const workerList = document.getElementById('worker-list');
+
+            // Get header for reference
+            const header = workerList.querySelector('.worker-list-header');
+
+            // Clear all worker items (excluding the header)
+            const itemsToRemove = workerList.querySelectorAll('.worker-item');
+            itemsToRemove.forEach(item => workerList.removeChild(item));
+
+            // Sort workers by solved count (descending)
+            workers.sort((a, b) => b.solved_count - a.solved_count);
+
+            // Add worker items
+            workers.forEach(worker => {
+                const isCurrentWorker = worker.id === workerId;
+
+                const workerItem = document.createElement('div');
+                workerItem.className = 'worker-item' + (isCurrentWorker ? ' highlight' : '');
+
+                const nameDisplay = document.createElement('div');
+                nameDisplay.textContent = worker.name + (isCurrentWorker ? ' (you)' : '');
+
+                const solvedDisplay = document.createElement('div');
+                solvedDisplay.textContent = worker.solved_count;
+
+                const statusDisplay = document.createElement('div');
+                const statusPill = document.createElement('span');
+                statusPill.className = 'status-pill status-active';
+                statusPill.textContent = 'Active';
+                statusDisplay.appendChild(statusPill);
+
+                workerItem.appendChild(nameDisplay);
+                workerItem.appendChild(solvedDisplay);
+                workerItem.appendChild(statusDisplay);
+
+                workerList.appendChild(workerItem);
+            });
+        }
+
+        function updateConnectionStatus(status) {
+            const statusEl = document.getElementById('connection-status');
+
+            statusEl.classList.remove('connected', 'disconnected', 'connecting');
+
+            if (status === 'connected') {
+                statusEl.classList.add('connected');
+                statusEl.innerHTML = '<i class="material-icons" style="font-size: 14px;">wifi</i><span>Connected</span>';
+            } else if (status === 'connecting') {
+                statusEl.classList.add('connecting');
+                statusEl.innerHTML = '<i class="material-icons" style="font-size: 14px;">sync</i><span>Connecting...</span>';
+            } else {
+                statusEl.classList.add('disconnected');
+                statusEl.innerHTML = '<i class="material-icons" style="font-size: 14px;">wifi_off</i><span>Disconnected</span>';
+            }
+        }
+
+        function handleTasksUpdate(tasks) {
+            const taskCountEl = document.getElementById('task-count');
+            assignedTasks = (tasks || []).slice().sort((a, b) => (b.created || 0) - (a.created || 0));
+            taskPage = 1;
+            const newTaskCount = assignedTasks.length;
+
+            // Update assigned tasks count
+            document.getElementById('pending-tasks').textContent = newTaskCount;
+
+            if (newTaskCount !== lastTaskCount || isManualRefresh) {
+                taskCountEl.innerText = newTaskCount > 0 ? `Your Tasks: ${newTaskCount}` : 'No assigned tasks';
+                lastTaskCount = newTaskCount;
+
+                if (newTaskCount === 0) {
+                    updateStatus("No tasks assigned to you. Waiting for new tasks...", 'warning');
+                } else {
+                    updateStatus(`${newTaskCount} captcha tasks assigned to you`, 'success');
+                }
+            }
+
+            cleanupOldTokens(assignedTasks);
+            renderCaptchaTasks(assignedTasks);
+
+            isManualRefresh = false;
+        }
+
+        function manualRefresh() {
+            isManualRefresh = true;
+            updateStatus("Refreshing tasks...");
+
+            if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                wsConnection.send(JSON.stringify({ type: 'refresh' }));
+            } else {
+                loadPendingTasks();
+
+                // Also refresh worker stats when using HTTP fallback
+                fetch('/api/active-workers')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            handleWorkerStats(data.workers, data.count);
+                        }
+                    })
+                    .catch(error => console.error('Error fetching active workers:', error));
+            }
+        }
+
+        function updateStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            if (isManualRefresh || message !== lastStatusMessage) {
+                statusEl.innerText = message;
+                lastStatusMessage = message;
+
+                statusEl.classList.remove('success-message', 'warning-message', 'error-message');
+
+                if (type === 'success') {
+                    statusEl.classList.add('success-message');
+                } else if (type === 'warning') {
+                    statusEl.classList.add('warning-message');
+                } else if (type === 'error') {
+                    statusEl.classList.add('error-message');
+                }
+
+                console.log(message);
+            }
+        }
+
+        async function loadPendingTasks() {
+            try {
+                const response = await fetch(`/api/pending-tasks?workerId=${encodeURIComponent(workerId)}`, {
+                    headers: {
+                        'x-solver-session': solverSessionId
+                    }
+                });
+                const tasks = await response.json();
+
+                handleTasksUpdate(tasks);
+
+                return Array.isArray(tasks) && tasks.length > 0;
+            } catch (error) {
+                updateStatus(`Error loading tasks: ${error.message}`, 'error');
+                isManualRefresh = false;
+                return false;
+            }
+        }
+
+        // When using HTTP fallback, we need to register device info separately
+        async function registerWorkerWithDeviceInfo() {
+            try {
+                const deviceInfo = getDeviceInfo();
+                const response = await fetch('/api/register-worker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        workerId: workerId,
+                        name: workerName,
+                        deviceInfo: deviceInfo
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    console.log("Worker registered with device info via HTTP");
+                }
+            } catch (error) {
+                console.error("Error registering worker with device info:", error);
+            }
+        }
+
+        function cleanupOldTokens(currentTasks) {
+            const currentTaskIds = new Set(currentTasks.map(task => task.id));
+
+            for (const taskId of solvedTokens.keys()) {
+                if (!currentTaskIds.has(taskId)) {
+                    solvedTokens.delete(taskId);
+                }
+            }
+
+            for (const taskId of captchaWidgets.keys()) {
+                if (!currentTaskIds.has(taskId)) {
+                    const widgetId = captchaWidgets.get(taskId);
+                    try {
+                        if (window.hcaptcha) {
+                            hcaptcha.remove(widgetId);
+                        }
+                    } catch (e) {
+                        console.error(`Error removing widget ${widgetId}:`, e);
+                    }
+                    captchaWidgets.delete(taskId);
+                }
+            }
+        }
+
+        function renderCaptchaTasks(tasks) {
+            const grid = document.getElementById('captcha-grid');
+            const totalTasks = tasks.length;
+            const totalPages = Math.max(1, Math.ceil(totalTasks / TASK_PAGE_SIZE));
+            if (taskPage > totalPages) taskPage = totalPages;
+
+            const start = (taskPage - 1) * TASK_PAGE_SIZE;
+            const pageTasks = tasks.slice(start, start + TASK_PAGE_SIZE);
+
+            // remove widgets/cards for tasks not on this page to avoid stale widgets
+            for (const taskId of captchaWidgets.keys()) {
+                if (!pageTasks.find(t => t.id === taskId)) {
+                    const widgetId = captchaWidgets.get(taskId);
+                    try {
+                        if (window.hcaptcha) {
+                            hcaptcha.remove(widgetId);
+                        }
+                    } catch (_) { }
+                    captchaWidgets.delete(taskId);
+                }
+            }
+
+            grid.innerHTML = '';
+
+            if (pageTasks.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.color = 'rgba(255,255,255,0.7)';
+                empty.textContent = 'No tasks on this page.';
+                grid.appendChild(empty);
+                updateCaptchaPagination(totalTasks, totalPages);
+                return;
+            }
+
+            pageTasks.forEach(task => {
+                addCaptchaCard(grid, task);
+            });
+
+            updateCaptchaPagination(totalTasks, totalPages);
+        }
+
+        function updateCaptchaPagination(totalTasks, totalPages) {
+            const info = document.getElementById('captcha-page-info');
+            const prev = document.getElementById('captcha-prev');
+            const next = document.getElementById('captcha-next');
+
+            info.textContent = `Page ${taskPage} of ${totalPages} (${totalTasks} tasks)`;
+            prev.disabled = taskPage <= 1;
+            next.disabled = taskPage >= totalPages;
+        }
+
+        function addCaptchaCard(grid, task) {
+            const card = document.createElement('div');
+            card.className = 'captcha-card';
+            card.setAttribute('data-task-id', task.id);
+
+            const cardHeader = document.createElement('div');
+            cardHeader.className = 'captcha-card-header';
+
+            const taskInfo = document.createElement('div');
+            taskInfo.className = 'captcha-info';
+            taskInfo.innerHTML = `
+                <span class="task-id">#${task.id.substring(0, 6)}</span>
+                <span class="task-time">${new Date(task.created).toLocaleTimeString()}</span>
+            `;
+
+            const resetBtn = document.createElement('button');
+            resetBtn.className = 'ripple reset-button';
+            resetBtn.onclick = () => resetCaptcha(task.id);
+            resetBtn.innerHTML = '<i class="material-icons" style="font-size: 14px;">refresh</i>';
+
+            cardHeader.appendChild(taskInfo);
+            cardHeader.appendChild(resetBtn);
+
+            card.appendChild(cardHeader);
+
+            const captchaContainer = document.createElement('div');
+            captchaContainer.id = `h-captcha-${task.id}`;
+            captchaContainer.className = 'h-captcha-container';
+
+            // Ensure proper scaling on mobile
+            if (window.innerWidth < 500) {
+                captchaContainer.style.overflow = 'hidden';
+                captchaContainer.style.maxWidth = '100%';
+            }
+
+            card.appendChild(captchaContainer);
+
+            const tokenDisplay = document.createElement('div');
+            tokenDisplay.className = 'token-display';
+            tokenDisplay.id = `token-display-${task.id}`;
+            card.appendChild(tokenDisplay);
+
+            grid.appendChild(card);
+
+            if (window.hcaptcha) {
+                initCaptchaWidget(task);
+            } else {
+                const checkInterval = setInterval(() => {
+                    if (window.hcaptcha) {
+                        clearInterval(checkInterval);
+                        initCaptchaWidget(task);
+                    }
+                }, 500);
+
+                setTimeout(() => clearInterval(checkInterval), 10000);
+            }
+        }
+
+        function initCaptchaWidget(task) {
+            const containerId = `h-captcha-${task.id}`;
+            const container = document.getElementById(containerId);
+            container.setAttribute('data-sitekey', task.siteKey);
+
+            if (!container) {
+                console.error(`Container ${containerId} not found`);
+                return;
+            }
+
+            if (solvedTokens.has(task.id)) {
+                const card = container.closest('.captcha-card');
+                markCardAsSolved(card, task.id, solvedTokens.get(task.id));
+                return;
+            }
+
+            try {
+                console.log(task.siteKey, task.rqdata);
+
+                const widgetId = hcaptcha.render(containerId, {
+                    sitekey: task.siteKey,
+                    rqdata: task.rqdata || '',
+                    size: 'normal',
+                    theme: 'dark',
+                    callback: (token) => onCaptchaSolved(token, task.id),
+                    'error-callback': (error) => onCaptchaError(error, task.id),
+                    'expired-callback': () => onCaptchaExpired(task.id)
+                });
+
+                captchaWidgets.set(task.id, widgetId);
+
+                if (task.rqdata) {
+                    hcaptcha.setData(widgetId, {
+                        rqdata: task.rqdata
+                    });
+                    // also modify iframe src to include rqdata
+                    const iframe = container.querySelector('iframe');
+                    if (iframe) {
+                        const src = new URL(iframe.src);
+                        src.searchParams.set('rqdata', task.rqdata);
+                        src.searchParams.set('origin', 'https://e2f713c5-b5ce-41d0-b65f-29823df542cf.react-native.hcaptcha.com');
+                        src.searchParams.set('host', 'e2f713c5-b5ce-41d0-b65f-29823df542cf.react-native.hcaptcha.com');
+                        iframe.src = src.toString();
+                        console.log(`Updated iframe src for task ${task.id}:`, iframe.src);
+                    }
+                }
+
+            } catch (error) {
+                console.error(`Error rendering captcha for task ${task.id}:`, error);
+                container.innerHTML = `<p class="error-message">Error: ${error.message}</p>`;
+            }
+        }
+
+        async function onCaptchaSolved(token, taskId) {
+            console.log(`Captcha solved for task ${taskId}`);
+
+            solvedTokens.set(taskId, token);
+
+            const card = document.querySelector(`.captcha-card[data-task-id="${taskId}"]`);
+            markCardAsSolved(card, taskId, token);
+
+            // Update local count immediately for better UX
+            if (workerInfo) {
+                workerInfo.solved_count++;
+                document.getElementById('solved-count').textContent = workerInfo.solved_count;
+            }
+
+            if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                wsConnection.send(JSON.stringify({
+                    type: 'solved',
+                    taskId: taskId,
+                    token: token,
+                    workerId: workerId
+                }));
+            } else {
+                await submitTokenToServer(taskId, token);
+            }
+        }
+
+        function markCardAsSolved(card, taskId, token) {
+            if (!card) return;
+
+            card.classList.add('solved');
+
+            if (!card.querySelector('.solved-indicator')) {
+                const indicator = document.createElement('div');
+                indicator.className = 'solved-indicator';
+                indicator.innerHTML = '<i class="material-icons" style="font-size: 14px;">check</i>';
+                card.appendChild(indicator);
+            }
+
+            solvedTokens.set(taskId, token);
+
+            const captchaContainer = document.getElementById(`h-captcha-${taskId}`);
+            if (captchaContainer) {
+                captchaContainer.innerHTML = '<p class="success-message" style="text-align: center; margin: 12px 0;"><i class="material-icons" style="font-size: 24px; display: block; margin: 0 auto 8px;">check_circle</i>Solved</p>';
+            }
+        }
+
+        async function submitTokenToServer(taskId, token) {
+            try {
+                const response = await fetch('/api/solve-task', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        taskId,
+                        token,
+                        workerId: workerId
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    console.log(`Successfully reported token for task ${taskId} to server`);
+                } else {
+                    console.error(`Error reporting token: ${result.message}`);
+                }
+            } catch (error) {
+                console.error('Error submitting token to server:', error);
+            }
+        }
+
+        function onCaptchaError(error, taskId) {
+            console.error(`Captcha error for task ${taskId}:`, error);
+
+            const container = document.getElementById(`h-captcha-${taskId}`);
+            if (container) {
+                const errorElement = document.createElement('p');
+                errorElement.className = 'error-message';
+                errorElement.innerText = `Error: ${error}`;
+                container.appendChild(errorElement);
+            }
+        }
+
+        function onCaptchaExpired(taskId) {
+            console.log(`Captcha expired for task ${taskId}`);
+            resetCaptcha(taskId);
+        }
+
+        function resetCaptcha(taskId) {
+            const widgetId = captchaWidgets.get(taskId);
+
+            if (widgetId && window.hcaptcha) {
+                hcaptcha.reset(widgetId);
+                console.log(`Reset captcha for task ${taskId}`);
+
+                const card = document.querySelector(`.captcha-card[data-task-id="${taskId}"]`);
+                if (card) {
+                    card.classList.remove('solved');
+                    const indicator = card.querySelector('.solved-indicator');
+                    if (indicator) {
+                        card.removeChild(indicator);
+                    }
+                }
+
+                const tokenDisplay = document.getElementById(`token-display-${taskId}`);
+                if (tokenDisplay) {
+                    tokenDisplay.style.display = 'none';
+                }
+
+                solvedTokens.delete(taskId);
+            }
+        }
+
+        window.onload = function () {
+            // Check if we're on a touch device and add appropriate class
+            if ('ontouchstart' in window || navigator.maxTouchPoints) {
+                document.body.classList.add('touch-device');
+            }
+
+            function wireUiAfterLogin() {
+                const nameDisplay = document.getElementById('worker-name-display');
+                nameDisplay.textContent = workerName || 'Worker';
+                document.getElementById('worker-id').textContent = `#${workerId.substring(0, 6)}`;
+
+                // Set up worker list toggle
+                document.getElementById('worker-list-toggle').addEventListener('click', function () {
+                    const workerList = document.getElementById('worker-list');
+                    const toggleIcon = document.getElementById('worker-list-toggle-icon');
+
+                    workerList.classList.toggle('collapsed');
+                    toggleIcon.classList.toggle('collapsed');
+                });
+
+                updateStatus("Connecting to server...");
+
+                document.getElementById('refresh-btn').addEventListener('click', function (e) {
+                    e.preventDefault();
+                    isManualRefresh = true;
+                    manualRefresh();
+                });
+
+                document.getElementById('captcha-prev').addEventListener('click', function () {
+                    if (taskPage > 1) {
+                        taskPage -= 1;
+                        renderCaptchaTasks(assignedTasks);
+                    }
+                });
+
+                document.getElementById('captcha-next').addEventListener('click', function () {
+                    const totalPages = Math.max(1, Math.ceil(assignedTasks.length / TASK_PAGE_SIZE));
+                    if (taskPage < totalPages) {
+                        taskPage += 1;
+                        renderCaptchaTasks(assignedTasks);
+                    }
+                });
+
+                connectWebSocket();
+
+                setTimeout(() => {
+                    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+                        console.log('WebSocket not connected, falling back to HTTP');
+                        isManualRefresh = true;
+
+                        // Register worker with device info via HTTP
+                        registerWorkerWithDeviceInfo();
+
+                        loadPendingTasks();
+
+                        // Also try to get worker info via HTTP
+                        fetch(`/api/worker-stats?workerId=${encodeURIComponent(workerId)}`, {
+                            headers: { 'x-solver-session': solverSessionId }
+                        })
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.success && data.worker) {
+                                    handleWorkerInfo(data.worker);
+                                }
+                            })
+                            .catch(error => console.error('Error fetching worker stats:', error));
+
+                        // And active workers
+                        fetch('/api/active-workers')
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.success) {
+                                    handleWorkerStats(data.workers, data.count);
+                                }
+                            })
+                            .catch(error => console.error('Error fetching active workers:', error));
+                    }
+                }, 3000);
+            }
+
+            async function handleLogin() {
+                try {
+                    const resp = await fetch('/api/solver/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: 'solver', name: workerName || 'Worker', workerId })
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok || !data.success) {
+                        updateStatus(data.message || 'Login failed', 'error');
+                        return;
+                    }
+                    solverSessionId = data.solver_session;
+                    workerId = data.workerId;
+                    workerName = data.name || workerName || 'Worker';
+                    localStorage.setItem(STORAGE_KEYS.solverSession, solverSessionId);
+                    localStorage.setItem(STORAGE_KEYS.workerId, workerId);
+                    localStorage.setItem(STORAGE_KEYS.workerName, workerName);
+                    document.getElementById('worker-name-display').textContent = workerName;
+                    document.getElementById('worker-id').textContent = `#${workerId.substring(0, 6)}`;
+                    document.getElementById('container').style.display = 'block';
+                    wireUiAfterLogin();
+                } catch (err) {
+                    updateStatus(err.message, 'error');
+                }
+            }
+
+            if (solverSessionId && workerId) {
+                document.getElementById('container').style.display = 'block';
+                wireUiAfterLogin();
+            } else {
+                document.getElementById('container').style.display = 'block';
+                handleLogin();
+            }
+        };
+
+        // Handle orientation changes for mobile
+        window.addEventListener('resize', function () {
+            const containers = document.querySelectorAll('.h-captcha-container');
+            containers.forEach(container => {
+                if (window.innerWidth < 500) {
+                    container.style.overflow = 'hidden';
+                    container.style.maxWidth = '100%';
+                } else {
+                    container.style.overflow = '';
+                    container.style.maxWidth = '';
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

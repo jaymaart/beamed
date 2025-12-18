@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DM Service</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Roboto', sans-serif; margin:0; padding:24px; background:#0f0f0f; color:#f5f5f5; }
+        .card { background:#181818; border:1px solid #222; border-radius:8px; padding:16px; margin-bottom:16px; }
+        input { width:100%; padding:10px; border-radius:4px; border:1px solid #333; background:#111; color:#fff; }
+        button { padding:10px 14px; border:none; border-radius:4px; background:#7c5cff; color:#000; font-weight:600; cursor:pointer; }
+        table { width:100%; border-collapse:collapse; margin-top:12px; }
+        th, td { padding:8px; border-bottom:1px solid #222; text-align:left; }
+        .flex { display:flex; gap:10px; flex-wrap:wrap; }
+        .hidden { display:none; }
+        .error { color:#ff6b6b; margin-top:6px; }
+        textarea { width:100%; min-height:100px; background:#111; color:#fff; border:1px solid #333; border-radius:4px; padding:10px; }
+        .terminal { background:#0b0b0b; border:1px solid #222; border-radius:6px; padding:12px; height:200px; overflow:auto; font-family: "Fira Code", monospace; font-size:12px; }
+        .terminal-line.info { color:#9ae6b4; }
+        .terminal-line.error { color:#ff6b6b; }
+        .terminal-line.warn { color:#f6d96f; }
+        .card h3 { margin-top:0; }
+    </style>
+</head>
+<body>
+    <div class="card" id="login-card">
+        <h2>Login / Register</h2>
+        <div class="flex">
+            <input id="dm-user-id" placeholder="User ID">
+            <input id="dm-user-name" placeholder="Name (optional)">
+            <input id="dm-user-pass" placeholder="Password" type="password">
+        </div>
+        <div class="flex">
+            <button id="dm-login">Login</button>
+            <button id="dm-register">Register</button>
+        </div>
+        <div id="dm-login-error" class="error hidden"></div>
+    </div>
+
+    <div class="card hidden" id="panel-card">
+        <div class="flex" style="align-items:center; justify-content:space-between;">
+            <div>
+                <div style="font-size:14px;">User</div>
+                <div id="dm-user-label" style="font-size:18px; font-weight:600;"></div>
+            </div>
+            <button id="dm-logout">Logout</button>
+        </div>
+
+        <h3 style="margin-top:16px;">Upload Tokens (.txt)</h3>
+        <div class="flex">
+            <input id="dm-token-file" type="file" accept=".txt" style="color:#fff;">
+            <button id="dm-token-upload">Upload</button>
+        </div>
+
+        <h3 style="margin-top:16px;">Upload Proxies (.txt)</h3>
+        <div class="flex">
+            <input id="dm-proxy-file" type="file" accept=".txt" style="color:#fff;">
+            <button id="dm-proxy-upload">Upload</button>
+        </div>
+
+        <div class="flex" style="margin-top:12px; align-items:center;">
+            <button id="dm-refresh">Refresh Lists</button>
+            <span id="dm-status" style="font-size:14px; color:#9ae6b4;"></span>
+        </div>
+
+        <div class="flex" style="margin-top:12px; gap:16px;">
+            <div style="flex:1;">
+                <h4>Tokens</h4>
+                <table>
+                    <thead><tr><th>ID</th><th>Token</th><th></th></tr></thead>
+                    <tbody id="dm-tokens-body"></tbody>
+                </table>
+            </div>
+            <div style="flex:1;">
+                <h4>Proxies</h4>
+                <table>
+                    <thead><tr><th>ID</th><th>Proxy</th><th></th></tr></thead>
+                    <tbody id="dm-proxies-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div style="margin-top:16px;" class="card">
+            <h3>Mass DM</h3>
+            <label style="font-size:14px;">Custom message (will be randomized per token if enabled)</label>
+            <textarea id="dm-message" placeholder="Enter your DM message..."></textarea>
+            <div class="flex">
+                <div style="flex:1; min-width:160px;">
+                    <label>Delay min (ms)</label>
+                    <input id="dm-delay-min" type="number" value="3000">
+                </div>
+                <div style="flex:1; min-width:160px;">
+                    <label>Delay max (ms)</label>
+                    <input id="dm-delay-max" type="number" value="5000">
+                </div>
+                <div style="flex:1; min-width:160px;">
+                    <label>DM cap (0 = unlimited)</label>
+                    <input id="dm-cap" type="number" value="0">
+                </div>
+            </div>
+            <div class="flex" style="align-items:center; margin-top:8px;">
+                <label style="display:flex; align-items:center; gap:6px; font-size:14px;">
+                    <input id="dm-randomize" type="checkbox" checked style="width:auto;"> Randomize messages
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:14px;">
+                    <input id="dm-rand-suffix" type="checkbox" checked style="width:auto;"> Random string suffix
+                </label>
+            </div>
+            <div class="flex" style="margin-top:10px; gap:8px;">
+                <button id="dm-start">Start</button>
+                <button id="dm-stop" style="background:#ff6b6b;">Stop</button>
+            </div>
+            <div style="margin-top:10px;">
+                <div class="terminal" id="dm-terminal"></div>
+            </div>
+        </div>
+
+        <div style="margin-top:16px;" class="card">
+            <h3>Member Scraper</h3>
+            <div class="flex">
+                <input id="scrape-invite" placeholder="Invite URL or code">
+                <button id="scrape-start">Scrape Members</button>
+                <button id="scrape-refresh">Refresh Members</button>
+                <button id="scrape-download">Download .txt</button>
+                <button id="scrape-clear" style="background:#ff6b6b;">Clear Saved</button>
+            </div>
+            <div class="terminal" id="scrape-terminal" style="height:140px; margin-top:10px;"></div>
+        </div>
+    </div>
+
+    <script>
+        const STORAGE_KEY_SESSION = 'dm_session';
+        const STORAGE_KEY_USER = 'dm_user_id';
+        const STORAGE_KEY_NAME = 'dm_user_name';
+        let dmSession = localStorage.getItem(STORAGE_KEY_SESSION) || '';
+        let dmUserId = localStorage.getItem(STORAGE_KEY_USER) || '';
+        let dmUserName = localStorage.getItem(STORAGE_KEY_NAME) || '';
+        let tokenCache = [];
+        let proxyCache = [];
+        let dmJobId = '';
+        let dmPollTimer = null;
+        let memberCache = [];
+
+        const loginCard = document.getElementById('login-card');
+        const panelCard = document.getElementById('panel-card');
+        const statusEl = document.getElementById('dm-status');
+
+        function setError(msg) {
+            const el = document.getElementById('dm-login-error');
+            if (msg) {
+                el.textContent = msg;
+                el.classList.remove('hidden');
+            } else {
+                el.classList.add('hidden');
+            }
+        }
+
+        function showPanel() {
+            document.getElementById('dm-user-label').textContent = dmUserName || dmUserId;
+            loginCard.classList.add('hidden');
+            panelCard.classList.remove('hidden');
+        }
+
+        function showLogin() {
+            loginCard.classList.remove('hidden');
+            panelCard.classList.add('hidden');
+        }
+
+        async function login(register = false) {
+            const userId = document.getElementById('dm-user-id').value.trim();
+            const name = document.getElementById('dm-user-name').value.trim();
+            const pass = document.getElementById('dm-user-pass').value;
+            if (!userId || !pass) {
+                return setError('User ID and password required');
+            }
+            try {
+                const resp = await fetch(register ? '/api/dm/user/register' : '/api/dm/user/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, name, password: pass })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    return setError(data.message || 'Login failed');
+                }
+                dmSession = data.dm_session;
+                dmUserId = data.user.id;
+                dmUserName = data.user.name || data.user.id;
+                localStorage.setItem(STORAGE_KEY_SESSION, dmSession);
+                localStorage.setItem(STORAGE_KEY_USER, dmUserId);
+                localStorage.setItem(STORAGE_KEY_NAME, dmUserName);
+                setError('');
+                showPanel();
+                await refreshLists();
+            } catch (err) {
+                setError(err.message);
+            }
+        }
+
+        async function refreshLists() {
+            statusEl.textContent = 'Loading...';
+            try {
+                const tokensResp = await fetch('/api/dm/user/tokens', { headers: { 'x-dm-session': dmSession } });
+                const tokensData = await tokensResp.json();
+                const proxiesResp = await fetch('/api/dm/user/proxies', { headers: { 'x-dm-session': dmSession } });
+                const proxiesData = await proxiesResp.json();
+                tokenCache = tokensData.tokens || [];
+                proxyCache = proxiesData.proxies || [];
+                renderList('dm-tokens-body', tokenCache, 'token', '/api/dm/user/token');
+                renderList('dm-proxies-body', proxyCache, 'proxy', '/api/dm/user/proxy');
+                statusEl.textContent = 'Loaded';
+            } catch (err) {
+                statusEl.textContent = err.message;
+            }
+        }
+
+        function renderList(tbodyId, rows, field, basePath) {
+            const tbody = document.getElementById(tbodyId);
+            tbody.innerHTML = '';
+            if (!rows.length) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td colspan="3" style="text-align:center;">None</td>`;
+                tbody.appendChild(tr);
+                return;
+            }
+            rows.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><span class="admin-badge">${String(r.id || '').substring(0,6)}</span></td>
+                    <td style="max-width:240px; overflow-wrap:anywhere;">${r[field]}</td>
+                    <td><button data-id="${r.id}" data-path="${basePath}" class="dm-del">Delete</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+            tbody.querySelectorAll('.dm-del').forEach(btn => {
+                btn.addEventListener('click', async function () {
+                    const id = this.getAttribute('data-id');
+                    const path = this.getAttribute('data-path');
+                    await fetch(`${path}/${id}`, { method: 'DELETE', headers: { 'x-dm-session': dmSession } });
+                    refreshLists();
+                });
+            });
+        }
+
+        document.getElementById('dm-login').addEventListener('click', () => login(false));
+        document.getElementById('dm-register').addEventListener('click', () => login(true));
+        document.getElementById('dm-refresh').addEventListener('click', refreshLists);
+        document.getElementById('dm-logout').addEventListener('click', () => {
+            dmSession = '';
+            localStorage.removeItem(STORAGE_KEY_SESSION);
+            showLogin();
+        });
+        const termEl = document.getElementById('dm-terminal');
+        function logTerm(msg, level = 'info') {
+            const line = document.createElement('div');
+            line.className = `terminal-line ${level}`;
+            const ts = new Date().toLocaleTimeString();
+            line.textContent = `[${ts}] ${msg}`;
+            termEl.appendChild(line);
+            termEl.scrollTop = termEl.scrollHeight;
+        }
+
+        const scrapeTerm = document.getElementById('scrape-terminal');
+        function logScrape(msg, level = 'info') {
+            const line = document.createElement('div');
+            line.className = `terminal-line ${level}`;
+            const ts = new Date().toLocaleTimeString();
+            line.textContent = `[${ts}] ${msg}`;
+            scrapeTerm.appendChild(line);
+            scrapeTerm.scrollTop = scrapeTerm.scrollHeight;
+        }
+
+        async function startMassDm() {
+            if (!tokenCache.length) {
+                logTerm('No tokens loaded. Upload tokens first.', 'error');
+                return;
+            }
+            const msg = document.getElementById('dm-message').value.trim();
+            if (!msg) {
+                logTerm('Message is required.', 'error');
+                return;
+            }
+            const dmin = Number(document.getElementById('dm-delay-min').value) || 3000;
+            const dmax = Number(document.getElementById('dm-delay-max').value) || 5000;
+            const cap = Number(document.getElementById('dm-cap').value) || 0;
+            const randomize = document.getElementById('dm-randomize').checked;
+            const randSuffix = document.getElementById('dm-rand-suffix').checked;
+
+            try {
+                const resp = await fetch('/api/dm/job/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
+                    body: JSON.stringify({
+                        message: msg,
+                        delay_min: dmin,
+                        delay_max: dmax,
+                        cap,
+                        randomize,
+                        rand_suffix: randSuffix
+                    })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    logTerm(data.message || 'Failed to start job', 'error');
+                    return;
+                }
+                dmJobId = data.job_id;
+                logTerm(`Job started: ${dmJobId}. Tokens=${data.tokens} Proxies=${data.proxies}`);
+                if (dmPollTimer) clearInterval(dmPollTimer);
+                dmPollTimer = setInterval(pollJobStatus, 3000);
+            } catch (err) {
+                logTerm(err.message, 'error');
+            }
+        }
+
+        async function pollJobStatus() {
+            if (!dmJobId) return;
+            try {
+                const resp = await fetch(`/api/dm/job/status?job_id=${encodeURIComponent(dmJobId)}`, {
+                    headers: { 'x-dm-session': dmSession }
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    logTerm(data.message || 'Job status error', 'error');
+                    return;
+                }
+                logTerm(`Job ${dmJobId} status: ${data.job.status} (tokens ${data.tokens}, proxies ${data.proxies})`);
+            } catch (err) {
+                logTerm(err.message, 'error');
+            }
+        }
+
+        async function stopMassDm() {
+            if (!dmJobId) {
+                logTerm('No active job to stop.', 'warn');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/dm/job/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
+                    body: JSON.stringify({ job_id: dmJobId })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    logTerm(data.message || 'Failed to stop job', 'error');
+                    return;
+                }
+                logTerm(`Stopped job ${dmJobId}`);
+                dmJobId = '';
+                if (dmPollTimer) clearInterval(dmPollTimer);
+            } catch (err) {
+                logTerm(err.message, 'error');
+            }
+        }
+
+        document.getElementById('dm-start').addEventListener('click', startMassDm);
+        document.getElementById('dm-stop').addEventListener('click', stopMassDm);
+
+        function handleFileUpload(inputId, type) {
+            const fileInput = document.getElementById(inputId);
+            if (!fileInput.files.length) return;
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const lines = (e.target.result || '')
+                    .split(/\r?\n/)
+                    .map(l => l.trim())
+                    .filter(Boolean);
+                if (!lines.length) return;
+                const path = type === 'token' ? '/api/dm/user/token/bulk' : '/api/dm/user/proxy/bulk';
+                const key = type === 'token' ? 'tokens' : 'proxies';
+                try {
+                    await fetch(path, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
+                        body: JSON.stringify({ [key]: lines })
+                    });
+                    refreshLists();
+                } catch (err) {
+                    statusEl.textContent = err.message;
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        document.getElementById('dm-token-upload').addEventListener('click', () => handleFileUpload('dm-token-file', 'token'));
+        document.getElementById('dm-proxy-upload').addEventListener('click', () => handleFileUpload('dm-proxy-file', 'proxy'));
+
+        async function scrapeMembers() {
+            const invite = document.getElementById('scrape-invite').value.trim();
+            if (!invite) {
+                logScrape('Invite required', 'error');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/dm/user/scrape-members', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
+                    body: JSON.stringify({ invite })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    logScrape(data.message || 'Scrape failed', 'error');
+                    return;
+                }
+                logScrape(`Scrape queued/joined guild ${data.guild_id}, inserted ${data.inserted} members`);
+                await refreshMembers();
+            } catch (err) {
+                logScrape(err.message, 'error');
+            }
+        }
+
+        async function refreshMembers() {
+            try {
+                const resp = await fetch('/api/dm/user/members', {
+                    headers: { 'x-dm-session': dmSession }
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    logScrape(data.message || 'Failed to load members', 'error');
+                    return;
+                }
+                memberCache = data.members || [];
+                logScrape(`Loaded ${memberCache.length} members`);
+            } catch (err) {
+                logScrape(err.message, 'error');
+            }
+        }
+
+        function downloadMembers() {
+            if (!memberCache.length) {
+                logScrape('No members to download', 'warn');
+                return;
+            }
+            const lines = memberCache.map(m => m.member_id).join('\n');
+            const blob = new Blob([lines], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'members.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        async function clearMembers() {
+            try {
+                const resp = await fetch('/api/dm/user/members', {
+                    method: 'DELETE',
+                    headers: { 'x-dm-session': dmSession }
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    logScrape(data.message || 'Failed to clear members', 'error');
+                    return;
+                }
+                memberCache = [];
+                logScrape('Cleared saved members');
+            } catch (err) {
+                logScrape(err.message, 'error');
+            }
+        }
+
+        document.getElementById('scrape-start').addEventListener('click', scrapeMembers);
+        document.getElementById('scrape-refresh').addEventListener('click', refreshMembers);
+        document.getElementById('scrape-download').addEventListener('click', downloadMembers);
+        document.getElementById('scrape-clear').addEventListener('click', clearMembers);
+
+        if (dmSession && dmUserId) {
+            showPanel();
+            refreshLists();
+            refreshMembers();
+        } else {
+            showLogin();
+        }
+    </script>
+</body>
+</html>
+

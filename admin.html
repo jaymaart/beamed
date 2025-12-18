@@ -1,0 +1,1373 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Slashy Admin Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+    <style>
+        :root {
+            --background: #0d1117;
+            --surface: #111827;
+            --surface-strong: #0f172a;
+            --surface-soft: rgba(255, 255, 255, 0.02);
+            --border: rgba(255, 255, 255, 0.06);
+            --primary: #7c3aed;
+            --primary-2: #a855f7;
+            --on-primary: #0d1117;
+            --text: rgba(255, 255, 255, 0.9);
+            --muted: rgba(255, 255, 255, 0.65);
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --spacing-sm: 8px;
+            --spacing-md: 14px;
+            --spacing-lg: 20px;
+            --font-size-xs: 12px;
+            --font-size-sm: 14px;
+            --font-size-md: 16px;
+            --font-size-lg: 22px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: var(--spacing-lg);
+            background: radial-gradient(circle at 20% 20%, rgba(124, 58, 237, 0.16), transparent 30%),
+                        radial-gradient(circle at 80% 10%, rgba(56, 189, 248, 0.12), transparent 24%),
+                        var(--background);
+            color: var(--text);
+            font-family: 'Roboto', sans-serif;
+        }
+
+        #container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .app-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+            padding: var(--spacing-lg);
+            background: linear-gradient(135deg, var(--surface), var(--surface-strong));
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            box-shadow: 0 18px 45px rgba(0, 0, 0, 0.32);
+            margin-bottom: var(--spacing-lg);
+        }
+
+        .app-header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .app-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle at 30% 30%, rgba(168, 85, 247, 0.35), rgba(124, 58, 237, 0.2));
+            color: var(--primary);
+        }
+
+        .admin-card {
+            background: linear-gradient(145deg, var(--surface), var(--surface-strong));
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: var(--spacing-lg);
+            margin-bottom: var(--spacing-lg);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+        }
+
+        .admin-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-md);
+        }
+
+        .admin-title {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .admin-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--spacing-sm);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: var(--spacing-md);
+            margin-bottom: var(--spacing-md);
+        }
+
+        .stat-card {
+            padding: var(--spacing-md);
+            background: var(--surface-soft);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .tab-container {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+        }
+
+        .tab-header {
+            display: inline-flex;
+            gap: var(--spacing-sm);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab-btn {
+            padding: var(--spacing-sm) var(--spacing-md);
+            background: transparent;
+            border: none;
+            color: var(--muted);
+            font-size: var(--font-size-sm);
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+        }
+
+        .tab-btn.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            font-weight: 600;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .admin-input {
+            width: 100%;
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            font-size: var(--font-size-sm);
+        }
+
+        .admin-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.25);
+        }
+
+        .search-container {
+            margin-bottom: var(--spacing-sm);
+        }
+
+        table.admin-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--surface-soft);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .admin-table th,
+        .admin-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .admin-table th {
+            text-align: left;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        .admin-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .admin-table tr:hover td {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .worker-actions {
+            display: flex;
+            gap: var(--spacing-sm);
+            align-items: center;
+            justify-content: flex-start;
+        }
+
+        .action-btn {
+            padding: 8px 12px;
+            font-size: 12px;
+            min-height: 36px;
+            border-radius: 10px;
+        }
+
+        button {
+            padding: 10px 14px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-2));
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--on-primary);
+            border-radius: 10px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            cursor: pointer;
+            transition: transform 0.12s ease, filter 0.2s ease, box-shadow 0.2s ease;
+            box-shadow: 0 10px 25px rgba(124, 58, 237, 0.28);
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+            filter: brightness(1.05);
+        }
+
+        button:active {
+            transform: translateY(0);
+            filter: brightness(0.96);
+        }
+
+        .refresh-icon {
+            cursor: pointer;
+            transition: transform 0.3s ease, color 0.2s ease;
+            color: var(--muted);
+        }
+
+        .refresh-icon:hover {
+            transform: rotate(180deg);
+            color: var(--primary);
+        }
+
+        .worker-status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .worker-status.active {
+            background-color: var(--success);
+        }
+
+        .worker-status.inactive {
+            background-color: var(--error);
+        }
+
+        .admin-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+
+        .auth-panel {
+            position: fixed;
+            inset: 0;
+            background-color: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .login-card {
+            max-width: 420px;
+            width: 92%;
+            background: linear-gradient(145deg, var(--surface), var(--surface-strong));
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+            padding: var(--spacing-lg);
+        }
+
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+            margin-top: var(--spacing-md);
+            align-items: stretch;
+        }
+
+        #login-btn {
+            align-self: center;
+        }
+
+        #login-status {
+            text-align: center;
+            color: var(--error);
+            font-size: 13px;
+        }
+
+        @media (max-width: 900px) {
+            body {
+                padding: var(--spacing-md);
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            }
+
+            .admin-table {
+                display: block;
+                overflow-x: auto;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="auth-panel" class="auth-panel" style="display: none;">
+        <div class="admin-card login-card">
+            <div class="admin-title">
+                <i class="material-icons">admin_panel_settings</i>
+                Admin Login
+            </div>
+            <div class="login-form">
+                <input type="password" id="admin-password" class="admin-input" placeholder="Admin Password">
+                <button id="login-btn" class="ripple">
+                    <i class="material-icons" style="font-size: 16px;">login</i>
+                    Login
+                </button>
+                <div id="login-status"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="container" style="display: none;">
+        <div class="app-header">
+            <div class="app-icon">
+                <i class="material-icons">admin_panel_settings</i>
+            </div>
+            <h1>Slashy Admin Dashboard</h1>
+        </div>
+
+        <div id="status" class="admin-card">
+            <div class="admin-header">
+                <div class="admin-title">
+                    <i class="material-icons">dashboard</i>
+                    Dashboard Overview
+                </div>
+                <i class="material-icons refresh-icon" id="refresh-stats" title="Refresh stats">refresh</i>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="total-solved">0</div>
+                    <div class="stat-label">Total Solved</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="active-workers">0</div>
+                    <div class="stat-label">Active Workers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="total-workers">0</div>
+                    <div class="stat-label">Total Workers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="pending-tasks">0</div>
+                    <div class="stat-label">Pending Tasks</div>
+                </div>
+                <div class="stat-card" style="grid-column: span 2; text-align:left;">
+                    <div class="admin-title" style="margin-bottom:6px;font-size:14px;gap:6px;">
+                        <i class="material-icons" style="font-size:16px;">verified_user</i>
+                        Manual Solve (live tasks)
+                    </div>
+                    <div id="manual-task-meta" style="font-size:12px;color:var(--muted);margin-bottom:6px;">No pending task.</div>
+                    <div id="manual-captcha-container" class="h-captcha"></div>
+                    <div id="manual-captcha-token" style="margin-top:8px;font-size:12px;color:var(--muted);word-break:break-all;"></div>
+                    <div style="display:flex;gap:8px;margin-top:8px;">
+                        <button id="manual-submit" style="flex:1;" disabled>Submit Token</button>
+                        <button id="manual-reset" style="flex:1;" disabled>Reset</button>
+                    </div>
+                </div>
+            </div>
+            <div class="admin-actions">
+                <button id="reset-all-btn" class="ripple">
+                    <i class="material-icons" style="font-size: 16px;">restart_alt</i>
+                    Reset All Workers
+                </button>
+            </div>
+        </div>
+
+        <div class="admin-card">
+            <div class="tab-container">
+                <div class="tab-header">
+                    <button class="tab-btn active" data-tab="workers-tab">
+                        <i class="material-icons" style="font-size: 16px; vertical-align: text-bottom;">people</i>
+                        Workers
+                    </button>
+                    <button class="tab-btn" data-tab="users-tab">
+                        <i class="material-icons" style="font-size: 16px; vertical-align: text-bottom;">supervisor_account</i>
+                        Users
+                    </button>
+                    <button class="tab-btn" data-tab="tasks-tab">
+                        <i class="material-icons" style="font-size: 16px; vertical-align: text-bottom;">task</i>
+                        Tasks
+                    </button>
+                </div>
+
+                <div id="workers-tab" class="tab-content active">
+                    <div class="search-container">
+                        <input type="text" id="worker-search" class="admin-input" placeholder="Search workers...">
+                    </div>
+                    <table class="admin-table" id="workers-table">
+                        <thead>
+                            <tr>
+                                <th>Worker ID</th>
+                                <th>Name</th>
+                                <th>Status</th>
+                                <th>Solved</th>
+                                <th>Device</th>
+                                <th>Browser</th>
+                                <th>OS</th>
+                                <th>IP</th>
+                                <th>First Seen</th>
+                                <th>Last Active</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="workers-tbody">
+                            <!-- Worker rows will be added dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="users-tab" class="tab-content">
+                    <div class="search-container" style="flex-wrap: wrap; gap:12px;">
+                        <input type="text" id="dm-user-id" class="admin-input" placeholder="User ID">
+                        <input type="text" id="dm-user-name" class="admin-input" placeholder="Name (optional)">
+                        <input type="password" id="dm-user-pass" class="admin-input" placeholder="Password (optional)">
+                        <button id="dm-user-save" class="ripple">Create / Update User</button>
+                    </div>
+                    <div class="search-container">
+                        <input type="text" id="user-search" class="admin-input" placeholder="Search users...">
+                    </div>
+                    <table class="admin-table" id="users-table">
+                        <thead>
+                            <tr>
+                                <th>User ID</th>
+                                <th>Name</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-tbody">
+                            <!-- User rows will be added dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="tasks-tab" class="tab-content">
+                    <div class="search-container">
+                        <input type="text" id="task-search" class="admin-input" placeholder="Search tasks...">
+                    </div>
+                    <table class="admin-table" id="tasks-table">
+                        <thead>
+                            <tr>
+                                <th>Task ID</th>
+                                <th>Status</th>
+                                <th>Site Key</th>
+                                <th>Created</th>
+                                <th>Solved Time</th>
+                                <th>Solved By</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tasks-tbody">
+                            <!-- Task rows will be added dynamically -->
+                        </tbody>
+                    </table>
+                    <div class="pagination" id="tasks-pagination" style="display: flex; gap: 8px; align-items: center; margin-top: 8px;">
+                        <button class="ripple" id="tasks-prev">Prev</button>
+                        <span id="tasks-page-info"></span>
+                        <button class="ripple" id="tasks-next">Next</button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let adminSessionId = '';
+        let adminAuthenticated = false;
+        let allWorkers = [];
+        let allTasks = [];
+        let filteredTasks = [];
+        let taskPage = 1;
+        const TASKS_PAGE_SIZE = 5;
+        let dmUsers = [];
+        let filteredUsers = [];
+        let userSearchTerm = '';
+        let activeWorkers = new Set();
+        let manualCaptchaWidgetId = null;
+        let manualCaptchaTaskId = null;
+        let manualCaptchaToken = null;
+
+        // Helper functions
+        function formatTime(timestamp) {
+            if (!timestamp) return 'N/A';
+            return new Date(timestamp).toLocaleString();
+        }
+
+        function formatTimeAgo(timestamp) {
+            if (!timestamp) return 'N/A';
+
+            const secondsAgo = Math.floor((Date.now() - timestamp * 1000) / 1000);
+
+            if (secondsAgo < 60) return `${secondsAgo} seconds ago`;
+            if (secondsAgo < 3600) return `${Math.floor(secondsAgo / 60)} minutes ago`;
+            if (secondsAgo < 86400) return `${Math.floor(secondsAgo / 3600)} hours ago`;
+            return `${Math.floor(secondsAgo / 86400)} days ago`;
+        }
+
+        // Authentication functions
+        async function authenticate() {
+            const password = document.getElementById('admin-password').value;
+
+            if (!password) {
+                document.getElementById('login-status').textContent = 'Please enter password';
+                return;
+            }
+
+            try {
+                // Clear previous status
+                document.getElementById('login-status').textContent = '';
+
+                console.log("Attempting login...");
+                const response = await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+
+                const data = await response.json();
+                console.log("Login response:", data);
+
+                if (data.success && data.session_id) {
+                    // Store the session ID
+                    adminSessionId = data.session_id;
+                    localStorage.setItem('adminSessionId', adminSessionId);
+
+                    // Set authenticated flag
+                    adminAuthenticated = true;
+
+                    // Show success message
+                    document.getElementById('login-status').innerHTML = '<span style="color: var(--success);">Login successful! Loading dashboard...</span>';
+
+                    // Give a moment for the success message to be seen
+                    setTimeout(() => {
+                        // Hide login panel and show dashboard
+                        document.getElementById('auth-panel').style.display = 'none';
+                        document.getElementById('container').style.display = 'block';
+
+                        // Load initial data
+                        loadAdminData();
+                    }, 500);
+                } else {
+                    document.getElementById('login-status').textContent = data.message || 'Authentication failed';
+                }
+            } catch (error) {
+                console.error("Login error:", error);
+                document.getElementById('login-status').textContent = `Error: ${error.message}`;
+            }
+        }
+
+        // Data loading functions
+        async function loadAdminData() {
+            try {
+                console.log("Loading admin data with session ID:", adminSessionId);
+                const response = await fetch(`/api/admin/stats?session_id=${encodeURIComponent(adminSessionId)}`);
+
+                console.log("Stats response status:", response.status);
+
+                if (response.status === 401) {
+                    console.error("Unauthorized access - session expired or invalid");
+                    // Unauthorized - show login panel again
+                    handleSessionExpired();
+                    return false;
+                }
+
+                const data = await response.json();
+                console.log("Stats data received:", data);
+
+                if (data.success) {
+                    // Reconstruct the status panel with all required elements
+                    const statusElement = document.getElementById('status');
+                    statusElement.innerHTML = `
+                        <div class="admin-header">
+                            <div class="admin-title">
+                                <i class="material-icons">dashboard</i>
+                                Dashboard Overview
+                            </div>
+                            <i class="material-icons refresh-icon" id="refresh-stats" title="Refresh stats">refresh</i>
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-solved">0</div>
+                                <div class="stat-label">Total Solved</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="active-workers">0</div>
+                                <div class="stat-label">Active Workers</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-workers">0</div>
+                                <div class="stat-label">Total Workers</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="pending-tasks">0</div>
+                                <div class="stat-label">Pending Tasks</div>
+                            </div>
+                        </div>
+                        <div class="admin-actions">
+                            <button id="reset-all-btn" class="ripple">
+                                <i class="material-icons" style="font-size: 16px;">restart_alt</i>
+                                Reset All Workers
+                            </button>
+                        </div>
+                    `;
+
+                    // Re-attach all event listeners
+                    document.getElementById('refresh-stats').addEventListener('click', loadAdminData);
+                    document.getElementById('reset-all-btn').addEventListener('click', function () {
+                        console.log("Reset all button clicked");
+                        resetAllWorkers();
+                    });
+
+                    // Now that all elements are created, update with data
+                    updateDashboardStats(data.stats);
+
+                    // Cache data for filtering
+                    allWorkers = data.stats.workers || [];
+                    allTasks = data.stats.recent_tasks || [];
+                    filteredTasks = allTasks;
+                    taskPage = 1;
+
+                    // Clear the active workers set first
+                    activeWorkers = new Set();
+
+                    // Process active worker information from API response
+                    processActiveWorkers(data.stats);
+
+                    // Render tables after activeWorkers set is populated
+                    renderWorkerTable(allWorkers);
+                    renderTaskTable(filteredTasks);
+
+                    return true;
+                }
+                return false;
+            } catch (error) {
+                console.error('Failed to load admin data:', error);
+                // Show error in status area
+                document.getElementById('status').innerHTML = `<div class="error-message">Error loading data: ${error.message}</div>`;
+                return false;
+            }
+        }
+
+        // New function to process active workers
+        function processActiveWorkers(stats) {
+            console.log("Processing active workers from stats:", stats);
+
+            // Clear the active workers set
+            activeWorkers = new Set();
+
+            // Check for active_worker_ids array (preferred format)
+            if (stats.active_worker_ids && Array.isArray(stats.active_worker_ids)) {
+                console.log("Found active_worker_ids array:", stats.active_worker_ids);
+                stats.active_worker_ids.forEach(id => {
+                    if (id) {
+                        // Normalize ID by trimming whitespace
+                        const normalizedId = String(id).trim();
+                        activeWorkers.add(normalizedId);
+                        console.log(`Added worker ID to activeWorkers set: "${normalizedId}"`);
+                    }
+                });
+            }
+            // Check for active_workers array of objects
+            else if (stats.active_workers && Array.isArray(stats.active_workers)) {
+                console.log("Found active_workers array of objects");
+                stats.active_workers.forEach(worker => {
+                    if (worker && worker.id) {
+                        const normalizedId = String(worker.id).trim();
+                        activeWorkers.add(normalizedId);
+                        console.log(`Added worker ID to activeWorkers set: "${normalizedId}"`);
+                    }
+                });
+            }
+            // Fallback: If active_workers is a number > 0 but we don't know which ones,
+            // use last_active timestamp to determine active workers (last 5 minutes)
+            else if (typeof stats.active_workers === 'number' && stats.active_workers > 0) {
+                console.log("Using last_active timestamp to determine active workers");
+                const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300; // 5 minutes ago
+
+                if (stats.workers && Array.isArray(stats.workers)) {
+                    stats.workers.forEach(worker => {
+                        // Consider worker active if they've been active in the last 5 minutes
+                        if (worker && worker.last_active && worker.last_active > fiveMinutesAgo) {
+                            const normalizedId = String(worker.id).trim();
+                            activeWorkers.add(normalizedId);
+                            console.log(`Added recently active worker: "${normalizedId}"`);
+                        }
+                    });
+                }
+            }
+
+            console.log("Final active workers set:", [...activeWorkers]);
+            console.log("Total active workers:", activeWorkers.size);
+        }
+
+        // Check if the user is already authenticated with a saved session
+        function checkExistingSession() {
+            const sessionId = localStorage.getItem('adminSessionId');
+            if (sessionId) {
+                console.log("Found existing session ID:", sessionId.substring(0, 8) + "...");
+                // Set the global adminSessionId variable immediately
+                adminSessionId = sessionId;
+
+                // Immediately show container to avoid flashing
+                document.getElementById('container').style.display = 'block';
+
+                // Try to load admin data using the session ID
+                setTimeout(() => {
+                    loadAdminData().then(success => {
+                        console.log("Session verification result:", success);
+                        if (success) {
+                            adminAuthenticated = true;
+                        } else {
+                            // Session is invalid, show auth panel and hide container
+                            handleSessionExpired();
+                        }
+                    }).catch(err => {
+                        console.error("Error during session verification:", err);
+                        handleSessionExpired();
+                    });
+                }, 100); // Small delay to ensure DOM is ready
+            } else {
+                console.log("No existing session found");
+                // No session found, show auth panel
+                document.getElementById('auth-panel').style.display = 'flex';
+            }
+        }
+
+        // Helper function to handle session expiration
+        function handleSessionExpired() {
+            console.log("Session may be expired - verifying with server");
+
+            // Get the session ID from localStorage once more
+            const sessionId = localStorage.getItem('adminSessionId');
+
+            if (!sessionId) {
+                // No session in localStorage, definitely expired
+                completeSessionExpiry();
+                return;
+            }
+
+            // Make one final verification with the server
+            fetch(`/api/admin/stats?session_id=${encodeURIComponent(sessionId)}`)
+                .then(response => {
+                    if (response.status === 401) {
+                        // Server confirmed session is invalid
+                        console.log("Server confirmed session is invalid");
+                        completeSessionExpiry();
+                    } else {
+                        // Session is actually still valid
+                        console.log("Session is still valid after verification");
+                        adminSessionId = sessionId;
+                        adminAuthenticated = true;
+                        document.getElementById('container').style.display = 'block';
+                        document.getElementById('auth-panel').style.display = 'none';
+                        return response.json().then(data => {
+                            if (data.success) {
+                                // Refresh data with the valid session
+                                updateDashboardStats(data.stats);
+                                allWorkers = data.stats.workers || [];
+                                allTasks = data.stats.recent_tasks || [];
+                                filteredTasks = allTasks;
+                                taskPage = 1;
+                                renderWorkerTable(allWorkers);
+                                renderTaskTable(filteredTasks);
+                            }
+                        });
+                    }
+                })
+                .catch(error => {
+                    // Connection error or other issue, assume session expired
+                    console.error("Session verification error:", error);
+                    completeSessionExpiry();
+                });
+
+            // Helper function to complete the session expiry process
+            function completeSessionExpiry() {
+                adminAuthenticated = false;
+                adminSessionId = '';
+                localStorage.removeItem('adminSessionId');
+                document.getElementById('auth-panel').style.display = 'flex';
+                document.getElementById('container').style.display = 'none';
+                document.getElementById('login-status').textContent = 'Session expired. Please log in again.';
+            }
+        }
+        // UI update functions
+        function updateDashboardStats(stats) {
+            document.getElementById('total-solved').textContent = stats.total_solved;
+            document.getElementById('active-workers').textContent = stats.active_workers;
+            document.getElementById('total-workers').textContent = stats.total_workers;
+            document.getElementById('pending-tasks').textContent = stats.pending_tasks;
+
+            // Set manual captcha task if any pending task exists
+            const pending = (stats.recent_tasks || []).find(t => t.status !== 'solved');
+            setManualCaptchaTask(pending || null);
+        }
+
+        function renderWorkerTable(workers) {
+            const tbody = document.getElementById('workers-tbody');
+            tbody.innerHTML = '';
+
+            if (workers.length === 0) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td colspan="10" style="text-align: center;">No workers found</td>`;
+                tbody.appendChild(row);
+                return;
+            }
+
+            // Sort workers by solved count (descending)
+            workers.sort((a, b) => b.solved_count - a.solved_count);
+
+            workers.forEach(worker => {
+                const row = document.createElement('tr');
+
+                // Make sure worker.id is a string and trim it
+                const workerId = worker.id ? String(worker.id).trim() : '';
+                const workerIp = worker.ip || '';
+
+                // Check if this worker is in the activeWorkers set
+                const isActive = activeWorkers.has(workerId);
+
+                console.log(`Worker "${workerId}" active status: ${isActive}`);
+
+                // Wrap the status indicator and text in a flex container to keep them on same line
+                const statusDisplay = `<span style="display: inline-flex; align-items: center;">
+                    <span class="worker-status ${isActive ? 'active' : 'inactive'}"></span>
+                    ${isActive ? 'Active' : 'Inactive'}
+                </span>`;
+
+                // Extract device info
+                const deviceInfo = worker.device_info || {};
+                const deviceType = deviceInfo.deviceType || 'Unknown';
+                const deviceModel = deviceInfo.deviceModel || 'Unknown';
+                const browser = deviceInfo.browser ? `${deviceInfo.browser} ${deviceInfo.browserVersion || ''}` : 'Unknown';
+                const os = deviceInfo.os || 'Unknown';
+
+                row.innerHTML = `
+                    <td><span class="admin-badge">${worker.id.substring(0, 6)}</span></td>
+                    <td>${worker.name}</td>
+                    <td>${statusDisplay}</td>
+                    <td><span class="stats-highlight">${worker.solved_count}</span></td>
+                    <td>${deviceType} ${deviceModel !== 'Unknown' ? `(${deviceModel})` : ''}</td>
+                    <td>${browser}</td>
+                    <td>${os}</td>
+                    <td>${workerIp}</td>
+                    <td>${formatTime(worker.first_seen)}</td>
+                    <td>${formatTimeAgo(worker.last_active)}</td>
+                    <td class="worker-actions">
+                        <button class="ripple action-btn reset-worker" data-id="${worker.id}">
+                            <i class="material-icons" style="font-size: 12px;">restart_alt</i>
+                            Reset
+                        </button>
+                        <button class="ripple action-btn remove-worker" data-id="${worker.id}">
+                            <i class="material-icons" style="font-size: 12px;">delete</i>
+                            Remove
+                        </button>
+                    </td>
+                `;
+
+                tbody.appendChild(row);
+            });
+
+            // Add event listeners to action buttons
+            document.querySelectorAll('.reset-worker').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    resetWorker(this.getAttribute('data-id'));
+                });
+            });
+
+            document.querySelectorAll('.remove-worker').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    removeWorker(this.getAttribute('data-id'));
+                });
+            });
+        }
+
+        function renderUserTable(users) {
+            const tbody = document.getElementById('users-tbody');
+            tbody.innerHTML = '';
+
+            if (!users.length) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td colspan="3" style="text-align: center;">No users found</td>`;
+                tbody.appendChild(row);
+                return;
+            }
+
+            users.forEach(user => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><span class="admin-badge">${String(user.id || '').substring(0, 6)}</span></td>
+                    <td>${user.name || 'User'}</td>
+                    <td>${user.created_at ? new Date(user.created_at).toLocaleString() : 'N/A'}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderTaskTable(tasks) {
+            const tbody = document.getElementById('tasks-tbody');
+            tbody.innerHTML = '';
+
+            const totalTasks = tasks.length;
+            const totalPages = Math.max(1, Math.ceil(totalTasks / TASKS_PAGE_SIZE));
+            if (taskPage > totalPages) taskPage = totalPages;
+
+            const start = (taskPage - 1) * TASKS_PAGE_SIZE;
+            const pageTasks = tasks.slice(start, start + TASKS_PAGE_SIZE);
+
+            if (pageTasks.length === 0) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td colspan="6" style="text-align: center;">No tasks found</td>`;
+                tbody.appendChild(row);
+                updateTaskPagination(totalTasks, totalPages);
+                return;
+            }
+
+            pageTasks.forEach(task => {
+                const row = document.createElement('tr');
+
+                const statusClass = task.status === 'solved' ? 'success-message' :
+                    task.status === 'error' ? 'error-message' : 'warning-message';
+
+                row.innerHTML = `
+                    <td><span class="admin-badge">${task.id.substring(0, 6)}</span></td>
+                    <td><span class="${statusClass}">${task.status}</span></td>
+                    <td>${task.siteKey}</td>
+                    <td>${formatTime(task.created)}</td>
+                    <td>${task.solved ? formatTime(task.solved) : 'Not solved'}</td>
+                    <td>${task.solved_by ? `<span class="stats-highlight">${task.solved_by.substring(0, 6)}</span>` : 'N/A'}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+
+            updateTaskPagination(totalTasks, totalPages);
+        }
+
+        function updateTaskPagination(totalTasks, totalPages) {
+            const info = document.getElementById('tasks-page-info');
+            const prev = document.getElementById('tasks-prev');
+            const next = document.getElementById('tasks-next');
+
+            info.textContent = `Page ${taskPage} of ${totalPages} (${totalTasks} tasks)`;
+            prev.disabled = taskPage <= 1;
+            next.disabled = taskPage >= totalPages;
+        }
+
+        // DM tables removed from admin (user-facing elsewhere)
+
+        // Action functions
+        async function resetWorker(workerId) {
+            if (!confirm(`Are you sure you want to reset stats for worker ${workerId}?`)) return;
+
+            try {
+                const response = await fetch('/api/admin/reset-worker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: adminSessionId,
+                        workerId: workerId
+                    })
+                });
+
+                if (response.status === 401) {
+                    // Session expired
+                    handleSessionExpired();
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(data.message);
+                    loadAdminData(); // Refresh the data
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function removeWorker(workerId) {
+            if (!confirm(`Are you sure you want to remove worker ${workerId}? This cannot be undone.`)) return;
+
+            try {
+                const response = await fetch('/api/admin/remove-worker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: adminSessionId,
+                        workerId: workerId
+                    })
+                });
+
+                if (response.status === 401) {
+                    // Session expired
+                    handleSessionExpired();
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(data.message);
+                    loadAdminData(); // Refresh the data
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        async function resetAllWorkers() {
+            if (!confirm('Are you sure you want to reset stats for ALL workers? This cannot be undone.')) return;
+
+            try {
+                console.log("Resetting all workers with session ID:", adminSessionId);
+                const response = await fetch('/api/admin/reset-all-workers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: adminSessionId
+                    })
+                });
+
+                if (response.status === 401) {
+                    // Session expired
+                    handleSessionExpired();
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error(`Server responded with status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(data.message);
+                    loadAdminData(); // Refresh the data
+                } else {
+                    alert(`Error: ${data.message}`);
+                }
+            } catch (error) {
+                console.error("Reset all workers error:", error);
+                alert(`Error: ${error.message}`);
+            }
+        }
+
+        // Set up filtering
+        function setupFilters() {
+            document.getElementById('worker-search').addEventListener('input', function () {
+                const searchTerm = this.value.toLowerCase();
+
+                const filteredWorkers = allWorkers.filter(worker =>
+                    worker.id.toLowerCase().includes(searchTerm) ||
+                    worker.name.toLowerCase().includes(searchTerm) ||
+                    (worker.device_info && worker.device_info.os &&
+                        worker.device_info.os.toLowerCase().includes(searchTerm)) ||
+                    (worker.device_info && worker.device_info.browser &&
+                        worker.device_info.browser.toLowerCase().includes(searchTerm)) ||
+                    (worker.device_info && worker.device_info.deviceModel &&
+                        worker.device_info.deviceModel.toLowerCase().includes(searchTerm))
+                );
+
+                renderWorkerTable(filteredWorkers);
+            });
+
+            document.getElementById('task-search').addEventListener('input', function () {
+                const searchTerm = this.value.toLowerCase();
+
+                filteredTasks = allTasks.filter(task =>
+                    task.id.toLowerCase().includes(searchTerm) ||
+                    task.siteKey.toLowerCase().includes(searchTerm) ||
+                    (task.solved_by && task.solved_by.toLowerCase().includes(searchTerm))
+                );
+
+                taskPage = 1;
+                renderTaskTable(filteredTasks);
+            });
+
+            document.getElementById('tasks-prev').addEventListener('click', function () {
+                if (taskPage > 1) {
+                    taskPage -= 1;
+                    renderTaskTable(filteredTasks);
+                }
+            });
+
+            document.getElementById('tasks-next').addEventListener('click', function () {
+                const totalPages = Math.max(1, Math.ceil(filteredTasks.length / TASKS_PAGE_SIZE));
+                if (taskPage < totalPages) {
+                    taskPage += 1;
+                    renderTaskTable(filteredTasks);
+                }
+            });
+
+            document.getElementById('user-search').addEventListener('input', function () {
+                const term = this.value.toLowerCase();
+                filteredUsers = dmUsers.filter(user =>
+                    (user.id && user.id.toLowerCase().includes(term)) ||
+                    (user.name && user.name.toLowerCase().includes(term))
+                );
+                renderUserTable(filteredUsers);
+            });
+
+            document.getElementById('dm-user-save').addEventListener('click', async function () {
+                const userId = document.getElementById('dm-user-id').value.trim();
+                const name = document.getElementById('dm-user-name').value.trim();
+                const pass = document.getElementById('dm-user-pass').value.trim();
+                if (!userId) return alert('User ID required');
+                try {
+                    const resp = await fetch('/api/dm/user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-session-id': adminSessionId },
+                        body: JSON.stringify({ user_id: userId, name, password: pass })
+                    });
+                    const data = await resp.json();
+                    if (!data.success) return alert(data.message || 'Failed to save user');
+                    await loadDmUsers();
+                    alert('User saved');
+                } catch (err) {
+                    alert(err.message);
+                }
+            });
+
+            async function loadDmUsers() {
+                try {
+                    const resp = await fetch('/api/dm/users', {
+                        headers: { 'x-session-id': adminSessionId }
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        dmUsers = data.users || [];
+                        filteredUsers = dmUsers;
+                        renderUserTable(filteredUsers);
+                    }
+                } catch (err) {
+                    console.error('Failed to load users', err);
+                }
+            }
+
+            loadDmUsers();
+        }
+
+        // Set up tab switching
+        function setupTabs() {
+            document.querySelectorAll('.tab-btn').forEach(tab => {
+                tab.addEventListener('click', function () {
+                    // Remove active class from all tabs
+                    document.querySelectorAll('.tab-btn').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+                    // Add active class to this tab and its content
+                    this.classList.add('active');
+                    document.getElementById(this.getAttribute('data-tab')).classList.add('active');
+                });
+            });
+        }
+
+        // Manual captcha handling (live tasks)
+        function setManualCaptchaTask(task) {
+            const meta = document.getElementById('manual-task-meta');
+            const submitBtn = document.getElementById('manual-submit');
+            const resetBtn = document.getElementById('manual-reset');
+            const tokenOut = document.getElementById('manual-captcha-token');
+
+            // If manual captcha UI is not present, skip
+            if (!meta || !submitBtn || !resetBtn || !tokenOut) return;
+
+            manualCaptchaTaskId = task ? task.id : null;
+            manualCaptchaToken = null;
+            submitBtn.disabled = true;
+            resetBtn.disabled = true;
+            tokenOut.textContent = '';
+
+            if (!task) {
+                meta.textContent = 'No pending task.';
+                if (window.hcaptcha && manualCaptchaWidgetId !== null) {
+                    hcaptcha.reset(manualCaptchaWidgetId);
+                }
+                return;
+            }
+
+            meta.textContent = `Task ${task.id.substring(0, 6)} | siteKey: ${task.siteKey}`;
+
+            const renderWidget = () => {
+                if (!window.hcaptcha) return;
+                if (manualCaptchaWidgetId === null) {
+                    manualCaptchaWidgetId = hcaptcha.render('manual-captcha-container', {
+                        sitekey: task.siteKey,
+                        rqdata: task.rqdata || '',
+                        theme: 'dark',
+                        callback: (token) => {
+                            manualCaptchaToken = token;
+                            tokenOut.textContent = `Token: ${token}`;
+                            submitBtn.disabled = false;
+                            resetBtn.disabled = false;
+                        },
+                        'expired-callback': () => {
+                            manualCaptchaToken = null;
+                            tokenOut.textContent = 'Expired. Solve again.';
+                            submitBtn.disabled = true;
+                        }
+                    });
+                } else {
+                    hcaptcha.reset(manualCaptchaWidgetId);
+                }
+            };
+
+            if (window.hcaptcha) {
+                renderWidget();
+            } else {
+                const check = setInterval(() => {
+                    if (window.hcaptcha) {
+                        clearInterval(check);
+                        renderWidget();
+                    }
+                }, 250);
+                setTimeout(() => clearInterval(check), 8000);
+            }
+        }
+
+        async function submitManualCaptcha() {
+            if (!manualCaptchaTaskId || !manualCaptchaToken) return;
+            try {
+                const resp = await fetch('/api/solve-task', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        taskId: manualCaptchaTaskId,
+                        token: manualCaptchaToken,
+                        workerId: 'admin-manual'
+                    })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    document.getElementById('manual-captcha-token').textContent = 'Submitted.';
+                    setManualCaptchaTask(null);
+                    loadAdminData();
+                } else {
+                    document.getElementById('manual-captcha-token').textContent = `Error: ${data.message || 'submit failed'}`;
+                }
+            } catch (err) {
+                document.getElementById('manual-captcha-token').textContent = `Error: ${err.message}`;
+            }
+        }
+
+        function resetManualCaptcha() {
+            if (window.hcaptcha && manualCaptchaWidgetId !== null) {
+                hcaptcha.reset(manualCaptchaWidgetId);
+                manualCaptchaToken = null;
+                document.getElementById('manual-captcha-token').textContent = '';
+                document.getElementById('manual-submit').disabled = true;
+            }
+        }
+
+        // Document ready
+        document.addEventListener('DOMContentLoaded', function () {
+            console.log("Document ready, checking for existing session");
+
+            // Check for existing session first
+            checkExistingSession();
+
+            // Set up login
+            document.getElementById('login-btn').addEventListener('click', authenticate);
+            document.getElementById('admin-password').addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') {
+                    authenticate();
+                }
+            });
+
+            // Set up tabs
+            setupTabs();
+
+            // Set up filters
+            setupFilters();
+
+            // Add a window storage event listener to handle session changes across tabs
+            window.addEventListener('storage', function (e) {
+                if (e.key === 'adminSessionId') {
+                    if (!e.newValue) {
+                        // Session was removed in another tab
+                        handleSessionExpired();
+                    } else if (e.newValue !== adminSessionId) {
+                        // Session was changed in another tab
+                        adminSessionId = e.newValue;
+                        loadAdminData();
+                    }
+                }
+            });
+
+            // Auto-refresh every 30 seconds only if we're authenticated
+            setInterval(function () {
+                if (adminAuthenticated && adminSessionId) {
+                    loadAdminData();
+                }
+            }, 30000);
+
+            // Manual captcha buttons
+            document.getElementById('manual-submit').addEventListener('click', submitManualCaptcha);
+            document.getElementById('manual-reset').addEventListener('click', resetManualCaptcha);
+        });
+    </script>
+</body>
+
+</html>

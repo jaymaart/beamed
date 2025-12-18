@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>hCaptcha Manual Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://js.hcaptcha.com/1/api.js" async defer></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0d1117;
+      color: #e5e7eb;
+      margin: 0;
+      padding: 24px;
+    }
+    .card {
+      max-width: 520px;
+      margin: 0 auto;
+      background: #111827;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.25);
+    }
+    button {
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: linear-gradient(135deg, #7c3aed, #a855f7);
+      color: #0d1117;
+      font-weight: 600;
+    }
+    textarea {
+      width: 100%;
+      height: 140px;
+      margin-top: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: #0b0f1a;
+      color: #e5e7eb;
+      padding: 10px;
+    }
+    .muted { color: #9ca3af; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Manual hCaptcha Test</h2>
+    <p class="muted">
+      Using sitekey: <code>ef722bba-b054-4080-8bf6-1120b124d970</code>.
+      Solve the captcha to see the token; use it to verify via <code>https://hcaptcha.com/siteverify</code> with your secret.
+    </p>
+    <div id="hc-container"></div>
+    <div style="display:flex;gap:10px;margin-top:12px;">
+      <button id="reset">Reset</button>
+      <button id="copy">Copy Token</button>
+    </div>
+    <textarea id="token" readonly placeholder="Token will appear here after solving"></textarea>
+    <div class="muted" style="margin-top:8px;">Tokens expire quickly; submit them to your backend immediately.</div>
+  </div>
+  <script>
+    const SITEKEY = 'ef722bba-b054-4080-8bf6-1120b124d970';
+    let widgetId = null;
+    const tokenBox = document.getElementById('token');
+
+    function renderCaptcha() {
+      if (!window.hcaptcha) return;
+      widgetId = hcaptcha.render('hc-container', {
+        sitekey: SITEKEY,
+        theme: 'dark',
+        callback: (token) => { tokenBox.value = token; },
+        'expired-callback': () => { tokenBox.value = 'Expired. Solve again.'; }
+      });
+    }
+
+    const check = setInterval(() => {
+      if (window.hcaptcha && hcaptcha.render && widgetId === null) {
+        clearInterval(check);
+        renderCaptcha();
+      }
+    }, 200);
+    setTimeout(() => clearInterval(check), 8000);
+
+    document.getElementById('reset').addEventListener('click', () => {
+      if (window.hcaptcha && widgetId !== null) {
+        hcaptcha.reset(widgetId);
+        tokenBox.value = '';
+      }
+    });
+
+    document.getElementById('copy').addEventListener('click', async () => {
+      if (!tokenBox.value) return;
+      try {
+        await navigator.clipboard.writeText(tokenBox.value);
+        tokenBox.value = tokenBox.value + '\n(copied)';
+      } catch (err) {
+        console.log('Clipboard failed:', err);
+      }
+    });
+  </script>
+</body>
+</html>
+
