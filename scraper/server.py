@@ -434,18 +434,37 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None, proxies=None):
 async def join_guild(token, invite_code, proxy=None):
     """Join a guild using discord.py-self with proper client session"""
     result = {"success": False}
+    client = None
     
     try:
         print(f"[JOIN] Logging in with token {token[:10]}...")
         
+        # Format proxy for aiohttp if provided
+        formatted_proxy = None
+        if proxy:
+            parts = proxy.split(':')
+            if len(parts) == 4:
+                # host:port:user:pass
+                host, port, user, password = parts
+                formatted_proxy = f"http://{user}:{password}@{host}:{port}"
+            elif len(parts) == 2:
+                # host:port (no auth)
+                host, port = parts
+                formatted_proxy = f"http://{host}:{port}"
+            else:
+                print(f"[JOIN] Invalid proxy format: {proxy}")
+        
         # Create client with proxy if provided
         kwargs = {}
-        if proxy:
+        if formatted_proxy:
             connector = aiohttp.TCPConnector()
             kwargs['connector'] = connector
-            kwargs['proxy'] = proxy
+            kwargs['proxy'] = formatted_proxy
+            print(f"[JOIN] Using proxy: {formatted_proxy.split('@')[-1] if '@' in formatted_proxy else formatted_proxy}")
         
         client = discord.Client(**kwargs)
+        
+        join_complete = asyncio.Event()
         
         @client.event
         async def on_ready():
@@ -469,21 +488,35 @@ async def join_guild(token, invite_code, proxy=None):
                     result["success"] = True
                     result["already_member"] = True
                 else:
-                    print(f"[JOIN] HTTP Error: {e}")
-                    result["error"] = str(e)
+                    print(f"[JOIN] HTTP Error: {e.status} - {e.text}")
+                    result["error"] = f"{e.status}: {e.text}"
             except Exception as e:
                 print(f"[JOIN] Error: {e}")
                 result["error"] = str(e)
             finally:
+                join_complete.set()
                 await client.close()
         
         # Start client (will trigger on_ready)
         await client.start(token)
         
-    except discord.errors.LoginFailure:
-        result["error"] = "Invalid token"
+        # Wait for join to complete (with timeout)
+        try:
+            await asyncio.wait_for(join_complete.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            print(f"[JOIN] Timeout waiting for join to complete")
+            result["error"] = "Timeout waiting for join"
+            if client:
+                await client.close()
+        
+    except discord.errors.LoginFailure as e:
+        result["error"] = f"Invalid token: {str(e)}"
+        if client:
+            await client.close()
     except Exception as e:
         result["error"] = str(e)
+        if client:
+            await client.close()
     
     return result
 

@@ -184,7 +184,7 @@ async function solveDmCaptcha(sitekey, rqdata, rqtoken) {
 }
 
 // Helper to join guild with token
-async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
+async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null, proxyString = null) {
   try {
     // Use scraper service to join (it has full discord.py-self client with proper session)
     const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://scraper:8600/scrape';
@@ -197,8 +197,10 @@ async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         token: token,
-        invite: inviteCode
-      })
+        invite: inviteCode,
+        proxy: proxyString || null
+      }),
+      agent: proxyAgent // Use proxy for the HTTP request to scraper service
     });
 
     //Handle scraper service response
@@ -223,6 +225,11 @@ async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
     await logDmEvent(jobId, 'info', `✅ Successfully joined guild`);
     return true;
   } catch (err) {
+    // Handle fetch network errors
+    if (err.message.includes('fetch failed') || err.message.includes('ECONNREFUSED') || err.message.includes('ENOTFOUND')) {
+      await logDmEvent(jobId, 'error', `📋 Network error connecting to join service: ${err.message}`);
+      throw new Error(`Join service unavailable: ${err.message}`);
+    }
     throw err;
   }
 }
@@ -348,7 +355,7 @@ async function executeDmJob(jobId, userId) {
         const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
         
         try {
-          await joinGuildWithToken(token, invite_code, jobId, proxyAgent);
+          await joinGuildWithToken(token, invite_code, jobId, proxyAgent, proxyString);
           await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... joined guild`);
           validTokens.push(tokenEntry);
           
