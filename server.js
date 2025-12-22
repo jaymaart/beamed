@@ -1598,14 +1598,18 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
   let inviteCode = invite.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
   const { channel_id } = req.body || {};
   
-  console.log(`[SCRAPER] User ${req.dmUserId} scraping invite: ${inviteCode} with ${tokens.length} token(s)${channel_id ? ` (channel: ${channel_id})` : ''}`);
+  // Get proxies for scraper
+  const proxiesRes = await pool.query('SELECT proxy FROM dm_proxies WHERE user_id=$1 ORDER BY created_at DESC', [req.dmUserId]);
+  const proxies = proxiesRes.rows.map(r => r.proxy).filter(Boolean);
   
-  // Call scraper service with all tokens
+  console.log(`[SCRAPER] User ${req.dmUserId} scraping invite: ${inviteCode} with ${tokens.length} token(s), ${proxies.length} proxies${channel_id ? ` (channel: ${channel_id})` : ''}`);
+  
+  // Call scraper service with all tokens and proxies
   const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://192.168.1.11:8600/scrape';
   const scrapeResp = await fetch(scraperUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tokens, invite: inviteCode, channel_id })
+    body: JSON.stringify({ tokens, invite: inviteCode, channel_id, proxies })
   });
   
   let result;

@@ -7,6 +7,7 @@ import requests
 from flask import Flask, request, jsonify
 from threading import Thread
 import discord
+import aiohttp
 
 # Ensure unbuffered output
 sys.stdout.reconfigure(encoding='utf-8')
@@ -67,11 +68,18 @@ def solve_captcha(site_key, rqdata=None):
         return None
 
 class ScraperClient(discord.Client):
-    def __init__(self, invite_code, result_dict, channel_id=None, *args, **kwargs):
+    def __init__(self, invite_code, result_dict, channel_id=None, proxy=None, *args, **kwargs):
+        # Create proxy connector if proxy is provided
+        if proxy:
+            connector = aiohttp.TCPConnector()
+            kwargs['connector'] = connector
+            kwargs['proxy'] = proxy
+        
         super().__init__(*args, **kwargs)
         self.invite_code = invite_code
         self.result = result_dict
         self.target_channel_id = channel_id
+        self.proxy = proxy
 
     async def setup_hook(self):
         # This runs when the client is setting up, after the loop is created
@@ -306,11 +314,11 @@ class ScraperClient(discord.Client):
         
         await self.close()
 
-async def run_scrape(token, invite_code, channel_id=None):
+async def run_scrape(token, invite_code, channel_id=None, proxy=None):
     result = {"success": False}
     
     try:
-        client = ScraperClient(invite_code, result, channel_id)
+        client = ScraperClient(invite_code, result, channel_id, proxy=proxy)
         await client.start(token)
     except Exception as e:
         if not result.get("error"):
@@ -318,21 +326,33 @@ async def run_scrape(token, invite_code, channel_id=None):
             
     return result
 
-async def run_scrape_multi(tokens, invite_code, channel_id=None):
+async def run_scrape_multi(tokens, invite_code, channel_id=None, proxies=None):
     """Scrape using multiple tokens to gather more members"""
     all_members = set()
     guild_id = None
     successful_scrapes = 0
     failed_tokens = []
+    proxies = proxies or []
     
-    print(f"Starting multi-token scrape with {len(tokens)} tokens...")
+    print(f"Starting multi-token scrape with {len(tokens)} tokens and {len(proxies)} proxies...")
     
     for idx, token in enumerate(tokens, 1):
+        # Rotate through proxies (if available)
+        proxy = None
+        if proxies:
+            proxy_str = proxies[(idx - 1) % len(proxies)]
+            # Format proxy for aiohttp (http://user:pass@host:port or http://host:port)
+            if not proxy_str.startswith('http'):
+                proxy = f"http://{proxy_str}"
+            else:
+                proxy = proxy_str
+            print(f"[Token {idx}/{len(tokens)}] Using proxy: {proxy.split('@')[-1] if '@' in proxy else proxy}")
+        
         print(f"\n{'='*60}")
         print(f"[Token {idx}/{len(tokens)}] 🔑 Attempting scrape with {token[:10]}...")
         print(f"{'='*60}")
         
-        result = await run_scrape(token, invite_code, channel_id)
+        result = await run_scrape(token, invite_code, channel_id, proxy=proxy)
         
         if result.get("success"):
             successful_scrapes += 1
@@ -413,12 +433,13 @@ def handle_scrape():
         
     invite = data['invite']
     channel_id = data.get('channel_id')
-    print(f"Scraping invite {invite} with {len(tokens)} token(s){' (channel: ' + str(channel_id) + ')' if channel_id else ''}")
+    proxies = data.get('proxies', [])
+    print(f"Scraping invite {invite} with {len(tokens)} token(s), {len(proxies)} proxies{' (channel: ' + str(channel_id) + ')' if channel_id else ''}")
     
     # Run the async scrape in a new event loop for this request
     # Since Flask is synchronous by default, we use asyncio.run
     try:
-        result = asyncio.run(run_scrape_multi(tokens, invite, channel_id))
+        result = asyncio.run(run_scrape_multi(tokens, invite, channel_id, proxies))
         print(f"Scrape result: {result.get('success')} - {result.get('count', 0)} members")
         return jsonify(result)
     except Exception as e:
