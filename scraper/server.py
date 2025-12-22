@@ -108,11 +108,6 @@ class ScraperClient(discord.Client):
                     print("Captcha required, solving...")
                     
                     # Extract captcha details from the error response
-                    site_key = "4c672d35-0701-42b2-88c3-78380b0db560"  # Discord's hcaptcha site key
-                    rqdata = None
-                    sitekey_from_response = None
-                    
-                    # discord.py HTTPException has a .json attribute with the error data
                     error_json = None
                     
                     # The exception has a .json attribute!
@@ -121,17 +116,20 @@ class ScraperClient(discord.Client):
                         print(f"Error JSON: {error_json}")
                     else:
                         print(f"No JSON data in exception")
+                        self.result["error"] = "Failed to extract captcha challenge data"
+                        await self.close()
+                        return
                     
-                    if error_json:
-                        rqdata = error_json.get("captcha_rqdata")
-                        rqtoken = error_json.get("captcha_rqtoken")
-                        sitekey_from_response = error_json.get("captcha_sitekey")
-                        if sitekey_from_response:
-                            site_key = sitekey_from_response
-                    else:
-                        print(f"Could not extract captcha data")
-                        rqdata = None
-                        rqtoken = None
+                    # Extract all required captcha data from Discord's response
+                    rqdata = error_json.get("captcha_rqdata")
+                    rqtoken = error_json.get("captcha_rqtoken")
+                    site_key = error_json.get("captcha_sitekey")
+                    
+                    if not site_key or not rqtoken:
+                        print(f"❌ Missing required captcha data")
+                        self.result["error"] = "Incomplete captcha challenge data from Discord"
+                        await self.close()
+                        return
                     
                     print(f"📋 Extracted rqdata: {rqdata[:50] if rqdata else None}...")
                     print(f"📋 Extracted rqtoken: {rqtoken[:50] if rqtoken else None}...")
@@ -167,8 +165,14 @@ class ScraperClient(discord.Client):
                         await asyncio.sleep(3)
                         guild = self.get_guild(guild_id)
                     except discord.HTTPException as retry_e:
-                        print(f"Captcha retry failed: {retry_e.status} - {retry_e.text if hasattr(retry_e, 'text') else str(retry_e)}")
-                        self.result["error"] = f"Failed to join after captcha: {str(retry_e)}"
+                        error_msg = retry_e.text if hasattr(retry_e, 'text') else str(retry_e)
+                        print(f"Captcha retry failed: {retry_e.status} - {error_msg}")
+                        
+                        # 403 errors often mean captcha solution was invalid/expired
+                        if retry_e.status == 403:
+                            self.result["error"] = f"Captcha solution rejected (403) - may be expired or invalid"
+                        else:
+                            self.result["error"] = f"Failed to join after captcha: {error_msg}"
                         await self.close()
                         return
                     except Exception as retry_e:
@@ -288,6 +292,7 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None):
     all_members = set()
     guild_id = None
     successful_scrapes = 0
+    failed_tokens = []
     
     print(f"Starting multi-token scrape with {len(tokens)} tokens...")
     
@@ -306,11 +311,19 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None):
         else:
             error = result.get("error", "Unknown error")
             print(f"[Token {idx}/{len(tokens)}] ❌ Failed: {error}")
+            
+            # Track failed tokens for debugging
+            if "Improper token" in error or "Unauthorized" in error:
+                failed_tokens.append(token[:15])
+            
             # Continue with next token even if this one fails
         
         # Small delay between tokens to avoid rate limits
         if idx < len(tokens):
             await asyncio.sleep(2)
+    
+    if failed_tokens:
+        print(f"\n⚠️ {len(failed_tokens)} invalid/unauthorized tokens detected")
     
     if len(all_members) == 0:
         return {"success": False, "error": "All tokens failed to scrape members"}
