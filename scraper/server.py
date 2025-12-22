@@ -123,13 +123,17 @@ class ScraperClient(discord.Client):
                     
                     if error_json:
                         rqdata = error_json.get("captcha_rqdata")
+                        rqtoken = error_json.get("captcha_rqtoken")
                         sitekey_from_response = error_json.get("captcha_sitekey")
                         if sitekey_from_response:
                             site_key = sitekey_from_response
                     else:
                         print(f"Could not extract captcha data")
+                        rqdata = None
+                        rqtoken = None
                     
                     print(f"Extracted rqdata: {rqdata}")
+                    print(f"Extracted rqtoken: {rqtoken}")
                     print(f"Using site_key: {site_key}")
                     
                     # Solve the captcha using our service (blocking call)
@@ -145,8 +149,8 @@ class ScraperClient(discord.Client):
                         from discord.http import Route
                         
                         payload = {"captcha_key": captcha_token}
-                        if rqdata:
-                            payload["captcha_rqtoken"] = rqdata
+                        if rqtoken:
+                            payload["captcha_rqtoken"] = rqtoken
                         
                         print(f"Submitting captcha with payload keys: {list(payload.keys())}")
                         route = Route("POST", f"/invites/{self.invite_code}")
