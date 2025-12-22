@@ -25,6 +25,46 @@ const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, ne
 // Job tracking
 const activeJobs = new Map(); // jobId -> { status, controller }
 
+// Generate random Discord fingerprint (X-Super-Properties)
+function generateDiscordFingerprint() {
+  const browsers = [
+    { name: 'Chrome', versions: ['120', '121', '122', '123', '124', '125'] },
+    { name: 'Firefox', versions: ['120', '121', '122', '123', '124'] },
+    { name: 'Edge', versions: ['120', '121', '122', '123'] }
+  ];
+  
+  const os = [
+    { name: 'Windows', versions: ['10', '11'] },
+    { name: 'Mac OS X', versions: ['10_15_7', '11_0_0', '12_0_0', '13_0_0', '14_0_0'] },
+    { name: 'Linux', versions: ['x86_64'] }
+  ];
+  
+  const selectedBrowser = browsers[Math.floor(Math.random() * browsers.length)];
+  const browserVersion = selectedBrowser.versions[Math.floor(Math.random() * selectedBrowser.versions.length)];
+  
+  const selectedOs = os[Math.floor(Math.random() * os.length)];
+  const osVersion = selectedOs.versions[Math.floor(Math.random() * selectedOs.versions.length)];
+  
+  const superProperties = {
+    os: selectedOs.name,
+    browser: selectedBrowser.name,
+    device: '',
+    system_locale: 'en-US',
+    browser_user_agent: `Mozilla/5.0 (${selectedOs.name === 'Windows' ? `Windows NT ${osVersion === '10' ? '10.0' : '10.0'}; Win64; x64` : selectedOs.name === 'Mac OS X' ? `Macintosh; Intel Mac OS X ${osVersion}` : 'X11; Linux x86_64'}) AppleWebKit/537.36 (KHTML, like Gecko) ${selectedBrowser.name}/${browserVersion}.0.0.0 Safari/537.36`,
+    browser_version: browserVersion + '.0.0.0',
+    os_version: osVersion,
+    referrer: '',
+    referring_domain: '',
+    referrer_current: '',
+    referring_domain_current: '',
+    release_channel: 'stable',
+    client_build_number: Math.floor(Math.random() * (250000 - 240000) + 240000),
+    client_event_source: null
+  };
+  
+  return Buffer.from(JSON.stringify(superProperties)).toString('base64');
+}
+
 // Helper to log DM events to database
 async function logDmEvent(jobId, logType, message) {
   try {
@@ -54,7 +94,10 @@ async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0) {
 async function validateToken(token, tokenId) {
   try {
     const resp = await fetch('https://discord.com/api/v9/users/@me', {
-      headers: { 'Authorization': token }
+      headers: { 
+        'Authorization': token,
+        'X-Super-Properties': generateDiscordFingerprint()
+      }
     });
     
     if (resp.status === 401) {
@@ -116,19 +159,28 @@ async function solveDmCaptcha(sitekey, rqdata, rqtoken) {
 // Helper to join guild with token
 async function joinGuildWithToken(token, inviteCode, jobId) {
   try {
+    const fingerprint = generateDiscordFingerprint();
     const joinResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
       method: 'POST',
       headers: {
         'Authorization': token,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'X-Super-Properties': fingerprint
       },
       body: JSON.stringify({})
     });
 
+    // Read body once and reuse
+    const responseText = await joinResp.text();
+    let errorData = {};
+    try {
+      errorData = JSON.parse(responseText);
+    } catch (e) {
+      // Not JSON
+    }
+
     // Handle captcha
     if (joinResp.status === 400) {
-      const errorData = await joinResp.json().catch(() => ({}));
-      
       // Check if already a member
       if (errorData.message && errorData.message.includes('already a member')) {
         throw new Error('already a member');
@@ -145,12 +197,14 @@ async function joinGuildWithToken(token, inviteCode, jobId) {
         
         await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying join...`);
         
-        // Retry with captcha
+        // Retry with captcha (new fingerprint for retry)
+        const retryFingerprint = generateDiscordFingerprint();
         const retryResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
           method: 'POST',
           headers: {
             'Authorization': token,
             'Content-Type': 'application/json',
+            'X-Super-Properties': retryFingerprint,
             'X-Captcha-Key': captchaKey,
             'X-Captcha-Rqtoken': errorData.captcha_rqtoken,
             'X-Captcha-Session-Id': errorData.captcha_session_id || ''
@@ -163,16 +217,23 @@ async function joinGuildWithToken(token, inviteCode, jobId) {
         });
         
         if (!retryResp.ok) {
-          const retryErrorData = await retryResp.json().catch(() => ({}));
+          const retryText = await retryResp.text();
+          let retryErrorData = {};
+          try {
+            retryErrorData = JSON.parse(retryText);
+          } catch (e) {}
+          
           if (retryErrorData.message && retryErrorData.message.includes('already a member')) {
             throw new Error('already a member');
           }
-          const errorText = await retryResp.text();
-          throw new Error(`Failed after captcha: ${retryResp.status} ${errorText.substring(0, 100)}`);
+          throw new Error(`Failed after captcha: ${retryResp.status} ${retryText.substring(0, 100)}`);
         }
         
         return true;
       }
+      
+      // Other 400 errors
+      throw new Error(`Bad request: ${responseText.substring(0, 100)}`);
     }
 
     if (joinResp.status === 401) {
@@ -180,16 +241,14 @@ async function joinGuildWithToken(token, inviteCode, jobId) {
     }
 
     if (joinResp.status === 403) {
-      const errorData = await joinResp.json().catch(() => ({}));
       if (errorData.code === 40007) {
         throw new Error('Token banned from guild');
       }
-      throw new Error(`Forbidden: ${JSON.stringify(errorData).substring(0, 100)}`);
+      throw new Error(`Forbidden: ${responseText.substring(0, 100)}`);
     }
 
     if (!joinResp.ok) {
-      const errorText = await joinResp.text();
-      throw new Error(`Join failed: ${joinResp.status} ${errorText.substring(0, 100)}`);
+      throw new Error(`Join failed: ${joinResp.status} ${responseText.substring(0, 100)}`);
     }
 
     return true;
@@ -255,6 +314,7 @@ async function executeDmJob(jobId, userId) {
     
     const tokenData = tokensRes.rows;
     await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokenData.length} token(s)`);
+    await logDmEvent(jobId, 'info', `🔐 Using randomized fingerprints for all requests`);
 
     // Step 1: Validate all tokens first
     await logDmEvent(jobId, 'info', `🔍 Validating tokens...`);
@@ -325,6 +385,10 @@ async function executeDmJob(jobId, userId) {
     }
 
     await logDmEvent(jobId, 'info', `✅ ${validTokens.length} token(s) ready to send DMs`);
+    
+    if (validTokens.length < 3) {
+      await logDmEvent(jobId, 'info', `⚠️ Warning: Only ${validTokens.length} token(s) available. Consider adding more tokens to avoid rate limits.`);
+    }
 
     // Fetch all members
     const allMembersRes = await pool.query('SELECT member_id FROM dm_members WHERE user_id=$1', [userId]);
@@ -341,32 +405,77 @@ async function executeDmJob(jobId, userId) {
     let sentCount = 0;
     let failedCount = 0;
     const maxToSend = cap > 0 ? Math.min(cap, shuffledMembers.length) : shuffledMembers.length;
+    const invalidTokenIds = new Set(); // Track tokens that became invalid during DMing
 
     await logDmEvent(jobId, 'info', `📨 Sending to ${maxToSend} member(s)...`);
 
     for (let i = 0; i < maxToSend && activeJobs.get(jobId)?.status === 'running'; i++) {
       const memberId = shuffledMembers[i];
-      const tokenEntry = validTokens[i % validTokens.length]; // Rotate through valid tokens only
+      
+      // Find next valid token (skip ones that became invalid)
+      let tokenEntry = null;
+      let tokenIndex = i % validTokens.length;
+      let attempts = 0;
+      
+      while (!tokenEntry && attempts < validTokens.length) {
+        const candidate = validTokens[tokenIndex];
+        if (!invalidTokenIds.has(candidate.id)) {
+          tokenEntry = candidate;
+        } else {
+          tokenIndex = (tokenIndex + 1) % validTokens.length;
+          attempts++;
+        }
+      }
+      
+      if (!tokenEntry) {
+        await logDmEvent(jobId, 'error', '❌ All tokens have become invalid. Stopping job.');
+        break;
+      }
+      
       const token = tokenEntry.token;
       const tokenId = tokenEntry.id;
+      
+      // Log which token we're using every 10 messages
+      if (i % 10 === 0 && i > 0) {
+        await logDmEvent(jobId, 'info', `📊 Progress: ${sentCount} sent, ${failedCount} failed. Using token ${tokenIndex + 1}/${validTokens.length}`);
+      }
 
       try {
-        // Create DM channel
+        // Create DM channel (new fingerprint for each request)
+        const dmFingerprint = generateDiscordFingerprint();
         const createDmResp = await fetch('https://discord.com/api/v9/users/@me/channels', {
           method: 'POST',
           headers: {
             'Authorization': token,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Super-Properties': dmFingerprint
           },
           body: JSON.stringify({ recipient_id: memberId }),
           signal: controller.signal
         });
 
         if (createDmResp.status === 401) {
-          // Mark token as invalid
+          // Mark token as invalid and add to skip list
+          invalidTokenIds.add(tokenId);
           await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
-          await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid (401)`);
-          throw new Error(`Failed to create DM: 401 Unauthorized - Token invalid`);
+          await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid (401) - will use next token`);
+          
+          // Check how many tokens are left
+          const remainingTokens = validTokens.length - invalidTokenIds.size;
+          if (remainingTokens === 0) {
+            await logDmEvent(jobId, 'error', `❌ All tokens are now invalid. Job cannot continue.`);
+          } else {
+            await logDmEvent(jobId, 'info', `ℹ️ ${remainingTokens} token(s) still available`);
+          }
+          
+          throw new Error(`Failed to create DM: 401 Unauthorized`);
+        }
+
+        if (createDmResp.status === 429) {
+          // Rate limited
+          const errorText = await createDmResp.text();
+          await logDmEvent(jobId, 'error', `⏱️ Token ${token.substring(0, 10)}... is rate limited`);
+          throw new Error(`Rate limited: ${errorText.substring(0, 100)}`);
         }
 
         if (!createDmResp.ok) {
@@ -377,12 +486,14 @@ async function executeDmJob(jobId, userId) {
         const dmChannel = await createDmResp.json();
         const channelId = dmChannel.id;
 
-        // Send message (with captcha handling)
+        // Send message (with captcha handling - new fingerprint)
+        const sendFingerprint = generateDiscordFingerprint();
         let sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
           method: 'POST',
           headers: {
             'Authorization': token,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Super-Properties': sendFingerprint
           },
           body: JSON.stringify({ content: message }),
           signal: controller.signal
@@ -402,12 +513,14 @@ async function executeDmJob(jobId, userId) {
             
             await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying send...`);
             
-            // Retry with captcha
+            // Retry with captcha (new fingerprint for retry)
+            const retrySendFingerprint = generateDiscordFingerprint();
             sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
               method: 'POST',
               headers: {
                 'Authorization': token,
                 'Content-Type': 'application/json',
+                'X-Super-Properties': retrySendFingerprint,
                 'X-Captcha-Key': captchaKey,
                 'X-Captcha-Rqtoken': errorData.captcha_rqtoken
               },
@@ -434,6 +547,13 @@ async function executeDmJob(jobId, userId) {
         failedCount++;
         await updateJobStats(jobId, 0, 1);
         await logDmEvent(jobId, 'error', `❌ Failed to DM ${memberId.substring(0, 8)}...: ${err.message}`);
+        
+        // Longer delay if rate limited or 401
+        if (err.message.includes('Rate limited') || err.message.includes('401')) {
+          await logDmEvent(jobId, 'info', `⏸️ Waiting 10 seconds before next attempt...`);
+          await new Promise(resolve => setTimeout(resolve, 10000));
+          continue; // Skip normal delay
+        }
       }
 
       // Delay between sends
@@ -1236,6 +1356,17 @@ app.post('/api/dm/user/validate-tokens', requireDmUser, asyncHandler(async (req,
     validated: tokensRes.rowCount,
     valid: validCount,
     invalid: invalidCount
+  });
+}));
+
+// Debug endpoint to view generated fingerprint
+app.get('/api/dm/debug/fingerprint', requireDmUser, asyncHandler(async (req, res) => {
+  const fingerprint = generateDiscordFingerprint();
+  const decoded = JSON.parse(Buffer.from(fingerprint, 'base64').toString('utf-8'));
+  res.json({ 
+    success: true, 
+    fingerprint_base64: fingerprint,
+    fingerprint_decoded: decoded
   });
 }));
 
