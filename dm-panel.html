@@ -137,7 +137,7 @@
         const STORAGE_KEY_SESSION = 'dm_session';
         const STORAGE_KEY_USER = 'dm_user_id';
         const STORAGE_KEY_NAME = 'dm_user_name';
-        const SCRAPER_URL = window.SCRAPER_URL || (document.querySelector('meta[name="scraper-url"]')?.content) || '/scrape';
+        const SCRAPER_URL = "http://192.168.1.11:8600/scrape"
         const SCRAPER_API_KEY = window.SCRAPER_API_KEY || (document.querySelector('meta[name="scraper-api-key"]')?.content) || '';
         let dmSession = localStorage.getItem(STORAGE_KEY_SESSION) || '';
         let dmUserId = localStorage.getItem(STORAGE_KEY_USER) || '';
