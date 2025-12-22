@@ -107,29 +107,21 @@
             <h3>Mass DM</h3>
             <label style="font-size:14px;">Server Invite (optional - use if tokens need to join)</label>
             <input id="dm-invite" placeholder="discord.gg/... or invite code" style="margin-bottom:8px;">
-            <label style="font-size:14px;">Custom message (will be randomized per token if enabled)</label>
+            <label style="font-size:14px;">Custom message</label>
             <textarea id="dm-message" placeholder="Enter your DM message..."></textarea>
             <div class="flex">
-                <div style="flex:1; min-width:160px;">
-                    <label>Delay min (ms)</label>
-                    <input id="dm-delay-min" type="number" value="3000">
-                </div>
-                <div style="flex:1; min-width:160px;">
-                    <label>Delay max (ms)</label>
-                    <input id="dm-delay-max" type="number" value="5000">
-                </div>
                 <div style="flex:1; min-width:160px;">
                     <label>DM cap (0 = unlimited)</label>
                     <input id="dm-cap" type="number" value="0">
                 </div>
             </div>
-            <div class="flex" style="align-items:center; margin-top:8px;">
-                <label style="display:flex; align-items:center; gap:6px; font-size:14px;">
-                    <input id="dm-randomize" type="checkbox" checked style="width:auto;"> Randomize messages
-                </label>
-                <label style="display:flex; align-items:center; gap:6px; font-size:14px;">
-                    <input id="dm-rand-suffix" type="checkbox" checked style="width:auto;"> Random string suffix
-                </label>
+            <div style="margin-top:8px; padding:10px; background:#2a2a2a; border-radius:6px; font-size:12px; color:#999;">
+                <strong>⚙️ Hardcoded Settings:</strong><br>
+                • Delay between messages: 3-5 seconds<br>
+                • Skip token after: 10 consecutive errors<br>
+                • Rate limit sleep: 10-11.67 minutes<br>
+                • Message randomization: Enabled<br>
+                • Random string suffix: Enabled
             </div>
             <div class="flex" style="margin-top:10px; gap:8px;">
                 <button id="dm-start">Start</button>
@@ -354,11 +346,7 @@
                 logTerm('Message is required.', 'error');
                 return;
             }
-            const dmin = Number(document.getElementById('dm-delay-min').value) || 3000;
-            const dmax = Number(document.getElementById('dm-delay-max').value) || 5000;
             const cap = Number(document.getElementById('dm-cap').value) || 0;
-            const randomize = document.getElementById('dm-randomize').checked;
-            const randSuffix = document.getElementById('dm-rand-suffix').checked;
             const inviteCode = document.getElementById('dm-invite').value.trim();
 
             try {
@@ -367,11 +355,7 @@
                     headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
                     body: JSON.stringify({
                         message: msg,
-                        delay_min: dmin,
-                        delay_max: dmax,
                         cap,
-                        randomize,
-                        rand_suffix: randSuffix,
                         invite_code: inviteCode || undefined
                     })
                 });

@@ -300,7 +300,17 @@ async function executeDmJob(jobId, userId) {
     }
     
     const job = jobRes.rows[0];
-    const { message, delay_min = 3000, delay_max = 5000, cap = 0 } = job;
+    const { message, cap = 0, invite_code } = job;
+    
+    // Hardcoded settings from config
+    const DELAY_BETWEEN_MSG_MIN = 3000;
+    const DELAY_BETWEEN_MSG_MAX = 5000;
+    const SKIP_TOKEN_AFTER_ERRORS = 10;
+    const DM_CAP_PER_TOKEN = 0; // 0 = unlimited
+    const RATELIMIT_SLEEP_MIN = 600000; // 10 minutes
+    const RATELIMIT_SLEEP_MAX = 700000; // 11.67 minutes
+    const RANDOMIZE_MESSAGES = true;
+    const RANDOM_STRING_END_OF_MESSAGE = true;
 
     // Fetch members and get guild info
     const membersRes = await pool.query(
@@ -323,9 +333,8 @@ async function executeDmJob(jobId, userId) {
     await logDmEvent(jobId, 'info', `🎯 Target guild: ${guildId}`);
 
     // Get invite code from job
-    const inviteCode = job.invite_code;
-    if (inviteCode) {
-      await logDmEvent(jobId, 'info', `📬 Using invite: ${inviteCode}`);
+    if (invite_code) {
+      await logDmEvent(jobId, 'info', `📬 Using invite: ${invite_code}`);
     } else {
       await logDmEvent(jobId, 'info', `⚠️ No invite code provided - tokens may already be in guild`);
     }
@@ -386,7 +395,7 @@ async function executeDmJob(jobId, userId) {
     // Step 2: Join guild with validated tokens (if invite code provided)
     const validTokens = [];
     
-    if (inviteCode) {
+    if (invite_code) {
       await logDmEvent(jobId, 'info', `🔗 Joining guild with tokens... (this may take a while)`);
       
       for (let idx = 0; idx < validatedTokens.length; idx++) {
@@ -398,7 +407,7 @@ async function executeDmJob(jobId, userId) {
         const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
         
         try {
-          await joinGuildWithToken(token, inviteCode, jobId, proxyAgent);
+          await joinGuildWithToken(token, invite_code, jobId, proxyAgent);
           await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... joined guild`);
           validTokens.push(tokenEntry);
           
@@ -452,29 +461,53 @@ async function executeDmJob(jobId, userId) {
     let failedCount = 0;
     const maxToSend = cap > 0 ? Math.min(cap, shuffledMembers.length) : shuffledMembers.length;
     const invalidTokenIds = new Set(); // Track tokens that became invalid during DMing
+    const tokenStats = new Map(); // Track stats per token: { errorCount, sentCount, rateLimited }
+    
+    // Initialize token stats
+    validTokens.forEach(t => {
+      tokenStats.set(t.id, { errorCount: 0, sentCount: 0, rateLimited: false });
+    });
 
     await logDmEvent(jobId, 'info', `📨 Sending to ${maxToSend} member(s)...`);
+    await logDmEvent(jobId, 'info', `⚙️ Config: Skip after ${SKIP_TOKEN_AFTER_ERRORS} errors | Delay ${DELAY_BETWEEN_MSG_MIN}-${DELAY_BETWEEN_MSG_MAX}ms | Rate limit sleep ${RATELIMIT_SLEEP_MIN/60000}-${RATELIMIT_SLEEP_MAX/60000}min`);
 
     for (let i = 0; i < maxToSend && activeJobs.get(jobId)?.status === 'running'; i++) {
       const memberId = shuffledMembers[i];
       
-      // Find next valid token (skip ones that became invalid)
+      // Find next valid token (skip invalid, error-prone, capped, and rate-limited tokens)
       let tokenEntry = null;
       let tokenIndex = i % validTokens.length;
       let attempts = 0;
       
       while (!tokenEntry && attempts < validTokens.length) {
         const candidate = validTokens[tokenIndex];
-        if (!invalidTokenIds.has(candidate.id)) {
+        const stats = tokenStats.get(candidate.id);
+        
+        // Check if token should be skipped
+        const isInvalid = invalidTokenIds.has(candidate.id);
+        const tooManyErrors = SKIP_TOKEN_AFTER_ERRORS > 0 && stats.errorCount >= SKIP_TOKEN_AFTER_ERRORS;
+        const reachedCap = DM_CAP_PER_TOKEN > 0 && stats.sentCount >= DM_CAP_PER_TOKEN;
+        const isRateLimited = stats.rateLimited;
+        
+        if (!isInvalid && !tooManyErrors && !reachedCap && !isRateLimited) {
           tokenEntry = candidate;
         } else {
+          if (tooManyErrors && attempts === 0) {
+            await logDmEvent(jobId, 'info', `⏭️ Skipping token ${candidate.token.substring(0, 10)}... (${stats.errorCount} errors)`);
+          }
+          if (reachedCap && attempts === 0) {
+            await logDmEvent(jobId, 'info', `⏭️ Skipping token ${candidate.token.substring(0, 10)}... (reached cap: ${stats.sentCount}/${DM_CAP_PER_TOKEN})`);
+          }
+          if (isRateLimited && attempts === 0) {
+            await logDmEvent(jobId, 'info', `⏭️ Skipping token ${candidate.token.substring(0, 10)}... (rate limited)`);
+          }
           tokenIndex = (tokenIndex + 1) % validTokens.length;
           attempts++;
         }
       }
       
       if (!tokenEntry) {
-        await logDmEvent(jobId, 'error', '❌ All tokens have become invalid. Stopping job.');
+        await logDmEvent(jobId, 'error', '❌ All tokens are invalid, rate-limited, or reached their cap. Stopping job.');
         break;
       }
       
@@ -523,10 +556,25 @@ async function executeDmJob(jobId, userId) {
         }
 
         if (createDmResp.status === 429) {
-          // Rate limited
-          const errorText = await createDmResp.text();
-          await logDmEvent(jobId, 'error', `⏱️ Token ${token.substring(0, 10)}... is rate limited`);
-          throw new Error(`Rate limited: ${errorText.substring(0, 100)}`);
+          // Rate limited - mark token and sleep
+          const errorData = await createDmResp.json().catch(() => ({}));
+          const retryAfter = errorData.retry_after || 60; // seconds
+          const stats = tokenStats.get(tokenId);
+          stats.rateLimited = true;
+          
+          await logDmEvent(jobId, 'error', `⏱️ Token ${token.substring(0, 10)}... is rate limited (retry after ${retryAfter}s)`);
+          
+          // Sleep for configured rate limit duration (10-11.67 minutes)
+          const sleepMs = Math.floor(Math.random() * (RATELIMIT_SLEEP_MAX - RATELIMIT_SLEEP_MIN + 1)) + RATELIMIT_SLEEP_MIN;
+          const sleepMinutes = (sleepMs / 60000).toFixed(1);
+          await logDmEvent(jobId, 'info', `😴 Rate limit detected - sleeping for ${sleepMinutes} minutes...`);
+          await new Promise(resolve => setTimeout(resolve, sleepMs));
+          
+          // Unmark rate limit after sleep
+          stats.rateLimited = false;
+          await logDmEvent(jobId, 'info', `⏰ Woke up from rate limit sleep, continuing...`);
+          
+          throw new Error(`Rate limited (slept ${sleepMinutes}m)`);
         }
 
         if (!createDmResp.ok) {
@@ -593,24 +641,37 @@ async function executeDmJob(jobId, userId) {
         }
 
         sentCount++;
+        const stats = tokenStats.get(tokenId);
+        stats.sentCount++;
+        stats.errorCount = 0; // Reset error count on success
+        
         await updateJobStats(jobId, 1, 0);
-        await logDmEvent(jobId, 'success', `✅ DM sent to ${memberId.substring(0, 8)}... (${sentCount}/${maxToSend})`);
+        await logDmEvent(jobId, 'success', `✅ DM sent to ${memberId.substring(0, 8)}... (${sentCount}/${maxToSend}) [Token: ${stats.sentCount}${DM_CAP_PER_TOKEN > 0 ? `/${DM_CAP_PER_TOKEN}` : ''}]`);
 
       } catch (err) {
         failedCount++;
+        const stats = tokenStats.get(tokenId);
+        
+        // Only increment error count for non-rate-limit errors
+        if (!err.message.includes('Rate limited')) {
+          stats.errorCount++;
+        }
+        
         await updateJobStats(jobId, 0, 1);
-        await logDmEvent(jobId, 'error', `❌ Failed to DM ${memberId.substring(0, 8)}...: ${err.message}`);
+        await logDmEvent(jobId, 'error', `❌ Failed to DM ${memberId.substring(0, 8)}...: ${err.message} [Errors: ${stats.errorCount}]`);
         
         // Longer delay if rate limited or 401
         if (err.message.includes('Rate limited') || err.message.includes('401')) {
-          await logDmEvent(jobId, 'info', `⏸️ Waiting 10 seconds before next attempt...`);
-          await new Promise(resolve => setTimeout(resolve, 10000));
+          if (!err.message.includes('slept')) { // Don't double-delay if we already slept
+            await logDmEvent(jobId, 'info', `⏸️ Waiting 10 seconds before next attempt...`);
+            await new Promise(resolve => setTimeout(resolve, 10000));
+          }
           continue; // Skip normal delay
         }
       }
 
-      // Delay between sends
-      const delay = Math.floor(Math.random() * (delay_max - delay_min + 1)) + delay_min;
+      // Delay between sends (3-5 seconds)
+      const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
 
@@ -700,7 +761,11 @@ async function ensureSchema() {
       sent_count INTEGER DEFAULT 0,
       failed_count INTEGER DEFAULT 0,
       invite_code TEXT,
-      guild_id TEXT
+      guild_id TEXT,
+      skip_token_after_errors INTEGER DEFAULT 10,
+      dm_cap_per_token INTEGER DEFAULT 0,
+      ratelimit_sleep_min INTEGER DEFAULT 600000,
+      ratelimit_sleep_max INTEGER DEFAULT 700000
     );
   `);
   
@@ -708,6 +773,10 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0;`);
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS invite_code TEXT;`);
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS guild_id TEXT;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS skip_token_after_errors INTEGER DEFAULT 10;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS dm_cap_per_token INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS ratelimit_sleep_min INTEGER DEFAULT 600000;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS ratelimit_sleep_max INTEGER DEFAULT 700000;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dm_logs (
@@ -1265,7 +1334,12 @@ app.post('/api/dm/user/proxy/bulk', requireDmUser, asyncHandler(async (req, res)
 }));
 
 app.post('/api/dm/job/start', requireDmUser, asyncHandler(async (req, res) => {
-  const { message, delay_min, delay_max, cap, randomize = true, rand_suffix = true, invite_code } = req.body || {};
+  const { 
+    message, 
+    cap, 
+    invite_code
+  } = req.body || {};
+  
   if (!message || !message.trim()) return res.status(400).json({ success: false, message: 'message required' });
   
   // Clean invite code
@@ -1280,9 +1354,9 @@ app.post('/api/dm/job/start', requireDmUser, asyncHandler(async (req, res) => {
   const id = uuidv4();
   const now = new Date();
   await pool.query(
-    `INSERT INTO dm_jobs (id, user_id, message, delay_min, delay_max, cap, randomize, rand_suffix, invite_code, status, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'running',$10,$10)`,
-    [id, req.dmUserId, message.trim(), delay_min || null, delay_max || null, cap || null, !!randomize, !!rand_suffix, cleanInvite, now]
+    `INSERT INTO dm_jobs (id, user_id, message, cap, invite_code, status, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,'running',$6,$6)`,
+    [id, req.dmUserId, message.trim(), cap || 0, cleanInvite, now]
   );
   // Provide counts to caller
   const tokensRes = await pool.query('SELECT COUNT(*) AS c FROM dm_tokens WHERE user_id=$1', [req.dmUserId]);
