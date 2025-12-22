@@ -414,20 +414,31 @@ async function executeDmJob(jobId, userId) {
           // Small delay between join attempts to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (err) {
-          // Check for "server join restricted" error (code 340015)
+          // Check for "server join restricted" error (code 340015) - account is fine, just can't join servers
           if (err.message.includes('340015') || err.message.includes('Access to joining new servers')) {
             await logDmEvent(jobId, 'info', `⏭️ Token ${token.substring(0, 10)}... restricted from joining servers (will try DMs anyway)`);
             validTokens.push(tokenEntry); // Still add - can DM even if can't join
-          } else if (err.message.includes('Token invalid')) {
-            await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
-            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... became invalid during join`);
-          } else if (err.message.includes('already a member')) {
+          } 
+          // Already a member - can definitely DM
+          else if (err.message.includes('already a member')) {
             await logDmEvent(jobId, 'info', `✓ Token ${token.substring(0, 10)}... already in guild`);
             validTokens.push(tokenEntry);
-          } else {
-            await logDmEvent(jobId, 'info', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message} (will try DMs anyway)`);
-            // Still add to valid tokens - might already be in guild or temporary error
-            validTokens.push(tokenEntry);
+          } 
+          // Token banned/invalid - mark as invalid
+          else if (err.message.includes('Token invalid') || err.message.includes('401')) {
+            await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
+            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid`);
+          } 
+          // 403 errors (banned, restricted, captcha failed) - don't use for DMing
+          else if (err.message.includes('403') || err.message.includes('Forbidden') || 
+                   err.message.includes('10008') || err.message.includes('Unknown Message')) {
+            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... failed to join (403/banned) - skipping DMing`);
+            // Don't add to validTokens - token is likely banned/restricted
+          } 
+          // Other errors - could be temporary, but don't risk it
+          else {
+            await logDmEvent(jobId, 'error', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message.substring(0, 100)} - skipping`);
+            // Don't add to valid tokens - unknown error, too risky
           }
         }
       }
