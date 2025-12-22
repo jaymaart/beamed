@@ -8,7 +8,6 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "discord.js-selfbot-v13": "^3.4.1",
     "express": "^4.19.2",
     "https-proxy-agent": "^7.0.2",
     "node-fetch": "^3.3.2",
