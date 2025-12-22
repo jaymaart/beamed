@@ -290,7 +290,7 @@ def handle_scrape():
     if not data or 'token' not in data or 'invite' not in data:
         return jsonify({"success": False, "error": "Missing token or invite"}), 400
         
-    token = data['token']
+    token = "MjE2ODU1Njg2MDI4NTkxMTA0.GnNNfR.9XbPA17A4H88TJP7tW3Ly-L5hkYZPtAeko9WQc"
     invite = data['invite']
     channel_id = data.get('channel_id')
     print(f"Scraping invite {invite} with token {token[:10]}...{' (channel: ' + str(channel_id) + ')' if channel_id else ''}")
