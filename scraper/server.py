@@ -52,12 +52,10 @@ class ScraperClient(discord.Client):
 
         members_data = []
         try:
-            if not guild.chunked:
-                await guild.chunk()
-            
             for member in guild.members:
-                members_data.append(member.id)
-                
+                if not member.bot:
+                    members_data.append(member.id)
+            
             self.result["success"] = True
             self.result["guild_id"] = str(guild.id)
             self.result["members"] = members_data
