@@ -727,7 +727,7 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
   let inviteCode = invite.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
   
   // Call scraper service
-  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://scraper:8600/scrape';
+  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://192.168.1.11:8600/scrape';
   const scrapeResp = await fetch(scraperUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
