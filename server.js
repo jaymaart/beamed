@@ -54,9 +54,12 @@ async function ensureSchema() {
       id UUID PRIMARY KEY,
       user_id TEXT NOT NULL,
       token TEXT NOT NULL,
+      status TEXT DEFAULT 'unknown',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+  
+  await pool.query(`ALTER TABLE dm_tokens ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'unknown';`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dm_proxies (
@@ -703,6 +706,18 @@ app.delete('/api/dm/user/proxy/:id', requireDmUser, asyncHandler(async (req, res
   res.json({ success: result.rowCount > 0 });
 }));
 
+app.delete('/api/dm/user/tokens/all', requireDmUser, asyncHandler(async (req, res) => {
+  const result = await pool.query('DELETE FROM dm_tokens WHERE user_id=$1', [req.dmUserId]);
+  console.log(`[DM] User ${req.dmUserId} deleted all ${result.rowCount} tokens`);
+  res.json({ success: true, deleted: result.rowCount });
+}));
+
+app.delete('/api/dm/user/proxies/all', requireDmUser, asyncHandler(async (req, res) => {
+  const result = await pool.query('DELETE FROM dm_proxies WHERE user_id=$1', [req.dmUserId]);
+  console.log(`[DM] User ${req.dmUserId} deleted all ${result.rowCount} proxies`);
+  res.json({ success: true, deleted: result.rowCount });
+}));
+
 async function fetchJsonWithToken(url, token, proxyAgent) {
   const resp = await fetch(url, {
     headers: {
@@ -767,6 +782,28 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
       );
       if (insertResult.rowCount > 0) inserted++;
     }
+    
+    // Update token status based on scraper results
+    if (result.invalid_tokens && result.invalid_tokens.length > 0) {
+      console.log(`[SCRAPER] Marking ${result.invalid_tokens.length} tokens as invalid`);
+      for (const invalidToken of result.invalid_tokens) {
+        await client.query(
+          `UPDATE dm_tokens SET status = 'invalid' WHERE user_id = $1 AND token LIKE $2`,
+          [req.dmUserId, invalidToken + '%']
+        );
+      }
+    }
+    
+    if (result.tokens_used > 0) {
+      // Mark successfully used tokens as valid
+      console.log(`[SCRAPER] Marking ${result.tokens_used} tokens as valid`);
+      await client.query(
+        `UPDATE dm_tokens SET status = 'valid' 
+         WHERE user_id = $1 AND status != 'invalid'`,
+        [req.dmUserId]
+      );
+    }
+    
     await client.query('COMMIT');
     console.log(`[SCRAPER] Inserted ${inserted} new members (${members.length - inserted} duplicates)`);
     res.json({ 

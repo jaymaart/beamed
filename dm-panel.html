@@ -65,15 +65,35 @@
 
         <div class="flex" style="margin-top:12px; gap:16px;">
             <div style="flex:1;">
-                <h4>Tokens</h4>
-                <table>
-                    <thead><tr><th>ID</th><th>Token</th><th></th></tr></thead>
+                <div style="display:flex; gap:10px; margin-bottom:12px;">
+                    <div style="flex:1; padding:12px; background:#2a2a2a; border-radius:6px; text-align:center;">
+                        <div style="font-size:24px; font-weight:bold; color:#4caf50;" id="token-valid-count">-</div>
+                        <div style="font-size:12px; color:#999;">Valid Tokens</div>
+                    </div>
+                    <div style="flex:1; padding:12px; background:#2a2a2a; border-radius:6px; text-align:center;">
+                        <div style="font-size:24px; font-weight:bold; color:#ff6b6b;" id="token-invalid-count">-</div>
+                        <div style="font-size:12px; color:#999;">Invalid Tokens</div>
+                    </div>
+                    <div style="flex:1; padding:12px; background:#2a2a2a; border-radius:6px; text-align:center;">
+                        <div style="font-size:24px; font-weight:bold; color:#2196f3;" id="token-total-count">-</div>
+                        <div style="font-size:12px; color:#999;">Total Tokens</div>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h4 style="margin:0;">Tokens</h4>
+                    <button id="delete-all-tokens" style="background:#ff6b6b; padding:6px 12px; font-size:12px;">Delete All Tokens</button>
+                </div>
+                <table style="margin-top:8px;">
+                    <thead><tr><th>ID</th><th>Token</th><th>Status</th><th></th></tr></thead>
                     <tbody id="dm-tokens-body"></tbody>
                 </table>
             </div>
             <div style="flex:1;">
-                <h4>Proxies</h4>
-                <table>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h4 style="margin:0;">Proxies</h4>
+                    <button id="delete-all-proxies" style="background:#ff6b6b; padding:6px 12px; font-size:12px;">Delete All Proxies</button>
+                </div>
+                <table style="margin-top:8px;">
                     <thead><tr><th>ID</th><th>Proxy</th><th></th></tr></thead>
                     <tbody id="dm-proxies-body"></tbody>
                 </table>
@@ -213,12 +233,47 @@
                 const proxiesData = await proxiesResp.json();
                 tokenCache = tokensData.tokens || [];
                 proxyCache = proxiesData.proxies || [];
-                renderList('dm-tokens-body', tokenCache, 'token', '/api/dm/user/token');
+                renderTokenList('dm-tokens-body', tokenCache);
                 renderList('dm-proxies-body', proxyCache, 'proxy', '/api/dm/user/proxy');
+                updateTokenStats(tokenCache);
                 statusEl.textContent = 'Loaded';
             } catch (err) {
                 statusEl.textContent = err.message;
             }
+        }
+
+        function updateTokenStats(tokens) {
+            const validCount = tokens.filter(t => !t.status || t.status === 'valid').length;
+            const invalidCount = tokens.filter(t => t.status === 'invalid').length;
+            const totalCount = tokens.length;
+            
+            document.getElementById('token-valid-count').textContent = validCount;
+            document.getElementById('token-invalid-count').textContent = invalidCount;
+            document.getElementById('token-total-count').textContent = totalCount;
+        }
+
+        function renderTokenList(tbodyId, tokens) {
+            const tbody = document.getElementById(tbodyId);
+            tbody.innerHTML = '';
+            if (!tokens.length) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td colspan="4" style="text-align:center;">None</td>`;
+                tbody.appendChild(tr);
+                return;
+            }
+            tokens.forEach(t => {
+                const tr = document.createElement('tr');
+                const status = t.status || 'unknown';
+                const statusColor = status === 'invalid' ? '#ff6b6b' : status === 'valid' ? '#4caf50' : '#999';
+                const statusText = status === 'invalid' ? '❌ Invalid' : status === 'valid' ? '✅ Valid' : '❓ Unknown';
+                tr.innerHTML = `
+                    <td><span class="admin-badge">${String(t.id || '').substring(0,6)}</span></td>
+                    <td style="max-width:240px; overflow-wrap:anywhere;">${t.token}</td>
+                    <td style="color:${statusColor}; font-size:12px;">${statusText}</td>
+                    <td><button data-id="${t.id}" data-path="/api/dm/user/token" class="dm-del">Delete</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
         }
 
         function renderList(tbodyId, rows, field, basePath) {
@@ -393,6 +448,44 @@
 
         document.getElementById('dm-token-upload').addEventListener('click', () => handleFileUpload('dm-token-file', 'token'));
         document.getElementById('dm-proxy-upload').addEventListener('click', () => handleFileUpload('dm-proxy-file', 'proxy'));
+
+        document.getElementById('delete-all-tokens').addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to delete ALL tokens? This cannot be undone.')) return;
+            try {
+                const resp = await fetch('/api/dm/user/tokens/all', {
+                    method: 'DELETE',
+                    headers: { 'x-dm-session': dmSession }
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert(`Deleted ${data.deleted} token(s)`);
+                    await refreshLists();
+                } else {
+                    alert('Failed to delete tokens');
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+
+        document.getElementById('delete-all-proxies').addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to delete ALL proxies? This cannot be undone.')) return;
+            try {
+                const resp = await fetch('/api/dm/user/proxies/all', {
+                    method: 'DELETE',
+                    headers: { 'x-dm-session': dmSession }
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert(`Deleted ${data.deleted} proxy/proxies`);
+                    await refreshLists();
+                } else {
+                    alert('Failed to delete proxies');
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
 
         let scrapeCooldown = false;
 

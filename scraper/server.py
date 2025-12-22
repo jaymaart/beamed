@@ -149,17 +149,20 @@ class ScraperClient(discord.Client):
                     print("✅ CAPTCHA SOLVED!")
                     print("="*60 + "\n")
                     
-                    # Retry with captcha token - make direct HTTP request
+                    # Retry with captcha token - Discord expects captcha in headers
                     try:
                         from discord.http import Route
                         
-                        payload = {"captcha_key": captcha_token}
+                        # Discord requires captcha data in headers, not JSON body
+                        headers = {
+                            "X-Captcha-Key": captcha_token
+                        }
                         if rqtoken:
-                            payload["captcha_rqtoken"] = rqtoken
+                            headers["X-Captcha-Rqtoken"] = rqtoken
                         
-                        print(f"Submitting captcha with payload keys: {list(payload.keys())}")
+                        print(f"Submitting captcha with headers: {list(headers.keys())}")
                         route = Route("POST", f"/invites/{self.invite_code}")
-                        await self.http.request(route, json=payload)
+                        await self.http.request(route, headers=headers)
                         
                         print("Successfully joined with captcha!")
                         await asyncio.sleep(3)
@@ -337,7 +340,8 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None):
         "members": list(all_members),
         "count": len(all_members),
         "tokens_used": successful_scrapes,
-        "tokens_total": len(tokens)
+        "tokens_total": len(tokens),
+        "invalid_tokens": failed_tokens
     }
 
 @app.route('/scrape', methods=['POST'])
