@@ -51,40 +51,91 @@ function createProxyAgent(proxyString) {
   }
 }
 
-// Generate random Discord fingerprint (X-Super-Properties)
+// Generate random Discord fingerprint (X-Super-Properties) - fully dynamic
 function generateDiscordFingerprint() {
+  // More browser versions and variety
   const browsers = [
-    { name: 'Chrome', versions: ['120', '121', '122', '123', '124', '125'] },
-    { name: 'Firefox', versions: ['120', '121', '122', '123', '124'] },
-    { name: 'Edge', versions: ['120', '121', '122', '123'] }
+    { name: 'Chrome', versions: ['120', '121', '122', '123', '124', '125', '126', '127'], uaPrefix: 'Chrome' },
+    { name: 'Firefox', versions: ['120', '121', '122', '123', '124', '125'], uaPrefix: 'Firefox' },
+    { name: 'Edge', versions: ['120', '121', '122', '123', '124'], uaPrefix: 'Edg' }
   ];
   
+  // More OS variety
   const os = [
-    { name: 'Windows', versions: ['10', '11'] },
-    { name: 'Mac OS X', versions: ['10_15_7', '11_0_0', '12_0_0', '13_0_0', '14_0_0'] },
-    { name: 'Linux', versions: ['x86_64'] }
+    { name: 'Windows', versions: ['10', '11'], uaParts: { win10: 'Windows NT 10.0; Win64; x64', win11: 'Windows NT 10.0; Win64; x64' } },
+    { name: 'Mac OS X', versions: ['10_15_7', '11_0_0', '12_0_0', '13_0_0', '14_0_0', '15_0_0'], uaParts: { mac: 'Macintosh; Intel Mac OS X' } },
+    { name: 'Linux', versions: ['x86_64'], uaParts: { linux: 'X11; Linux x86_64' } }
   ];
   
+  // Random locales (common ones)
+  const locales = ['en-US', 'en-GB', 'en-CA', 'en-AU', 'fr-FR', 'de-DE', 'es-ES', 'it-IT', 'pt-BR', 'ja-JP', 'ko-KR', 'zh-CN', 'zh-TW', 'ru-RU', 'pl-PL', 'nl-NL', 'sv-SE', 'no-NO', 'da-DK', 'fi-FI'];
+  
+  // Random referrer domains (common Discord-related)
+  const referrerDomains = ['', 'discord.com', 'discordapp.com', 'google.com', 'reddit.com', 'twitter.com', 'youtube.com'];
+  
+  // Select random combinations
   const selectedBrowser = browsers[Math.floor(Math.random() * browsers.length)];
   const browserVersion = selectedBrowser.versions[Math.floor(Math.random() * selectedBrowser.versions.length)];
+  const browserPatch = Math.floor(Math.random() * 100); // 0-99 for patch version
   
   const selectedOs = os[Math.floor(Math.random() * os.length)];
   const osVersion = selectedOs.versions[Math.floor(Math.random() * selectedOs.versions.length)];
+  
+  const locale = locales[Math.floor(Math.random() * locales.length)];
+  const referrerDomain = referrerDomains[Math.floor(Math.random() * referrerDomains.length)];
+  
+  // Generate realistic user agent
+  let userAgent = '';
+  if (selectedOs.name === 'Windows') {
+    const winPart = osVersion === '10' ? 'Windows NT 10.0; Win64; x64' : 'Windows NT 10.0; Win64; x64';
+    if (selectedBrowser.name === 'Chrome') {
+      userAgent = `Mozilla/5.0 (${winPart}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)} Safari/537.36`;
+    } else if (selectedBrowser.name === 'Edge') {
+      userAgent = `Mozilla/5.0 (${winPart}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)} Safari/537.36 Edg/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)}`;
+    } else {
+      userAgent = `Mozilla/5.0 (${winPart}; rv:${browserVersion}.0) Gecko/20100101 Firefox/${browserVersion}.0`;
+    }
+  } else if (selectedOs.name === 'Mac OS X') {
+    const macVersion = osVersion.replace(/_/g, '_');
+    if (selectedBrowser.name === 'Chrome') {
+      userAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X ${macVersion}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)} Safari/537.36`;
+    } else if (selectedBrowser.name === 'Edge') {
+      userAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X ${macVersion}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)} Safari/537.36 Edg/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)}`;
+    } else {
+      userAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X ${macVersion}; rv:${browserVersion}.0) Gecko/20100101 Firefox/${browserVersion}.0`;
+    }
+  } else {
+    // Linux
+    if (selectedBrowser.name === 'Chrome') {
+      userAgent = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)} Safari/537.36`;
+    } else if (selectedBrowser.name === 'Edge') {
+      userAgent = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)} Safari/537.36 Edg/${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)}`;
+    } else {
+      userAgent = `Mozilla/5.0 (X11; Linux x86_64; rv:${browserVersion}.0) Gecko/20100101 Firefox/${browserVersion}.0`;
+    }
+  }
+  
+  // Wider build number range (Discord desktop app builds)
+  const buildNumber = Math.floor(Math.random() * (280000 - 230000) + 230000);
+  
+  // Random release channel (mostly stable, but some variation)
+  const releaseChannels = ['stable', 'stable', 'stable', 'canary', 'ptb']; // 80% stable
+  const releaseChannel = releaseChannels[Math.floor(Math.random() * releaseChannels.length)];
   
   const superProperties = {
     os: selectedOs.name,
     browser: selectedBrowser.name,
     device: '',
-    system_locale: 'en-US',
-    browser_user_agent: `Mozilla/5.0 (${selectedOs.name === 'Windows' ? `Windows NT ${osVersion === '10' ? '10.0' : '10.0'}; Win64; x64` : selectedOs.name === 'Mac OS X' ? `Macintosh; Intel Mac OS X ${osVersion}` : 'X11; Linux x86_64'}) AppleWebKit/537.36 (KHTML, like Gecko) ${selectedBrowser.name}/${browserVersion}.0.0.0 Safari/537.36`,
-    browser_version: browserVersion + '.0.0.0',
+    system_locale: locale,
+    browser_user_agent: userAgent,
+    browser_version: `${browserVersion}.0.${browserPatch}.${Math.floor(Math.random() * 10)}`,
     os_version: osVersion,
-    referrer: '',
-    referring_domain: '',
-    referrer_current: '',
-    referring_domain_current: '',
-    release_channel: 'stable',
-    client_build_number: Math.floor(Math.random() * (250000 - 240000) + 240000),
+    referrer: referrerDomain ? `https://${referrerDomain}/` : '',
+    referring_domain: referrerDomain,
+    referrer_current: referrerDomain ? `https://${referrerDomain}/` : '',
+    referring_domain_current: referrerDomain,
+    release_channel: releaseChannel,
+    client_build_number: buildNumber,
     client_event_source: null
   };
   
