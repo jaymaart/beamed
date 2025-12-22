@@ -719,22 +719,22 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
   const { invite } = req.body || {};
   if (!invite) return res.status(400).json({ success: false, message: '❌ Invite code required' });
 
-  // Get first available token
-  const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1', [req.dmUserId]);
+  // Get ALL available tokens for this user
+  const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1 ORDER BY created_at DESC', [req.dmUserId]);
   if (!tokensRes.rowCount) return res.status(400).json({ success: false, message: '❌ No tokens available. Please upload tokens first.' });
   
-  const token = tokensRes.rows[0].token;
+  const tokens = tokensRes.rows.map(r => r.token).filter(Boolean);
   let inviteCode = invite.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
   const { channel_id } = req.body || {};
   
-  console.log(`[SCRAPER] User ${req.dmUserId} scraping invite: ${inviteCode}${channel_id ? ` (channel: ${channel_id})` : ''}`);
+  console.log(`[SCRAPER] User ${req.dmUserId} scraping invite: ${inviteCode} with ${tokens.length} token(s)${channel_id ? ` (channel: ${channel_id})` : ''}`);
   
-  // Call scraper service
+  // Call scraper service with all tokens
   const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://192.168.1.11:8600/scrape';
   const scrapeResp = await fetch(scraperUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, invite: inviteCode, channel_id })
+    body: JSON.stringify({ tokens, invite: inviteCode, channel_id })
   });
   
   const result = await scrapeResp.json().catch(() => ({}));

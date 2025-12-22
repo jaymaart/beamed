@@ -283,23 +283,74 @@ async def run_scrape(token, invite_code, channel_id=None):
             
     return result
 
+async def run_scrape_multi(tokens, invite_code, channel_id=None):
+    """Scrape using multiple tokens to gather more members"""
+    all_members = set()
+    guild_id = None
+    successful_scrapes = 0
+    
+    print(f"Starting multi-token scrape with {len(tokens)} tokens...")
+    
+    for idx, token in enumerate(tokens, 1):
+        print(f"\n[Token {idx}/{len(tokens)}] Attempting scrape with {token[:10]}...")
+        
+        result = await run_scrape(token, invite_code, channel_id)
+        
+        if result.get("success"):
+            successful_scrapes += 1
+            guild_id = result.get("guild_id")
+            members = result.get("members", [])
+            new_members = len(members) - len(all_members & set(members))
+            all_members.update(members)
+            print(f"[Token {idx}/{len(tokens)}] ✅ Success! Added {new_members} new members (total: {len(all_members)})")
+        else:
+            error = result.get("error", "Unknown error")
+            print(f"[Token {idx}/{len(tokens)}] ❌ Failed: {error}")
+            # Continue with next token even if this one fails
+        
+        # Small delay between tokens to avoid rate limits
+        if idx < len(tokens):
+            await asyncio.sleep(2)
+    
+    if len(all_members) == 0:
+        return {"success": False, "error": "All tokens failed to scrape members"}
+    
+    print(f"\n✅ Multi-token scrape complete: {successful_scrapes}/{len(tokens)} tokens successful")
+    print(f"📊 Total unique members: {len(all_members)}")
+    
+    return {
+        "success": True,
+        "guild_id": guild_id,
+        "members": list(all_members),
+        "count": len(all_members),
+        "tokens_used": successful_scrapes,
+        "tokens_total": len(tokens)
+    }
+
 @app.route('/scrape', methods=['POST'])
 def handle_scrape():
     print(f"Received scrape request")
     data = request.json
-    if not data or 'token' not in data or 'invite' not in data:
-        return jsonify({"success": False, "error": "Missing token or invite"}), 400
+    
+    # Accept either single token or multiple tokens
+    tokens = data.get('tokens', [])
+    if not tokens:
+        token = data.get('token')
+        if token:
+            tokens = [token]
+    
+    if not data or not tokens or 'invite' not in data:
+        return jsonify({"success": False, "error": "Missing tokens or invite"}), 400
         
-    token = "MjE2ODU1Njg2MDI4NTkxMTA0.GnNNfR.9XbPA17A4H88TJP7tW3Ly-L5hkYZPtAeko9WQc"
     invite = data['invite']
     channel_id = data.get('channel_id')
-    print(f"Scraping invite {invite} with token {token[:10]}...{' (channel: ' + str(channel_id) + ')' if channel_id else ''}")
+    print(f"Scraping invite {invite} with {len(tokens)} token(s){' (channel: ' + str(channel_id) + ')' if channel_id else ''}")
     
     # Run the async scrape in a new event loop for this request
     # Since Flask is synchronous by default, we use asyncio.run
     try:
-        result = asyncio.run(run_scrape(token, invite, channel_id))
-        print(f"Scrape result: {result.get('success')} {result.get('error')}")
+        result = asyncio.run(run_scrape_multi(tokens, invite, channel_id))
+        print(f"Scrape result: {result.get('success')} - {result.get('count', 0)} members")
         return jsonify(result)
     except Exception as e:
         print(f"Server exception: {str(e)}")
