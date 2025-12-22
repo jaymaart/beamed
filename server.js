@@ -2,17 +2,14 @@ const http = require('http');
 const path = require('path');
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { spawn } = require('child_process');
 const WebSocket = require('ws');
 const { Pool } = require('pg');
 
 // Config
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
 const SOLVER_PASSWORD = process.env.SOLVER_PASSWORD || 'solver';
-const API_BASE = process.env.API_BASE ? process.env.API_BASE.replace(/\/$/, '') : "http://localhost:8000";
 const PORT = process.env.PORT || 8000;
 const FIVE_MINUTES = 5 * 60 * 1000;
-const CAPTCHA_TIMEOUT_MS = 150 * 1000; // 2.5 minutes
 const MAX_TASKS_PER_WORKER = 5;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
@@ -719,11 +716,56 @@ async function fetchJsonWithToken(url, token, proxyAgent) {
 }
 
 app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, res) => {
-  const { invite, max, channel_id } = req.body || {};
+  const { invite } = req.body || {};
   if (!invite) return res.status(400).json({ success: false, message: 'invite required' });
-  const maxMembers = Number(max) > 0 ? Number(max) : 10000;
-  const result = await scrapeMembersWithInvite(req.dmUserId, invite, maxMembers, true, channel_id || null);
-  res.json({ success: true, guild_id: result.guildId, inserted: result.inserted });
+
+  // Get first available token
+  const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1', [req.dmUserId]);
+  if (!tokensRes.rowCount) return res.status(400).json({ success: false, message: 'No tokens available' });
+  
+  const token = tokensRes.rows[0].token;
+  let inviteCode = invite.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
+  
+  // Call scraper service
+  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://scraper:8600/scrape';
+  const scrapeResp = await fetch(scraperUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, invite: inviteCode })
+  });
+  
+  const result = await scrapeResp.json().catch(() => ({}));
+  
+  if (!scrapeResp.ok || !result.success) {
+    return res.status(scrapeResp.status || 500).json({ 
+      success: false, 
+      message: result.error || 'Scraper service failed' 
+    });
+  }
+
+  // Save members to database
+  const guildId = result.guild_id;
+  const members = result.members || [];
+  
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const mid of members) {
+      await client.query(
+        `INSERT INTO dm_members (id, user_id, guild_id, member_id, created_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (user_id, member_id) DO NOTHING`,
+        [uuidv4(), req.dmUserId, guildId, mid]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, guild_id: guildId, inserted: members.length });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }));
 
 app.get('/api/dm/user/members', requireDmUser, asyncHandler(async (req, res) => {
