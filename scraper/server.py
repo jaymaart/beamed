@@ -2,6 +2,8 @@ import os
 import sys
 import json
 import asyncio
+import time
+import requests
 from flask import Flask, request, jsonify
 from threading import Thread
 import discord
@@ -10,6 +12,59 @@ import discord
 sys.stdout.reconfigure(encoding='utf-8')
 
 app = Flask(__name__)
+
+# Captcha solving configuration
+CAPTCHA_API_BASE = os.environ.get('API_BASE', 'http://192.168.1.11:8204')
+CAPTCHA_TIMEOUT = 150  # 2.5 minutes
+
+def solve_captcha(site_key, rqdata=None):
+    """Submit captcha to solving service and wait for solution"""
+    try:
+        # Submit the captcha task
+        task_resp = requests.post(
+            f"{CAPTCHA_API_BASE}/api/tasks",
+            json={"siteKey": site_key, "rqdata": rqdata},
+            timeout=10
+        )
+        
+        if not task_resp.ok:
+            print(f"Failed to submit captcha task: {task_resp.status_code}")
+            return None
+            
+        task_data = task_resp.json()
+        if not task_data.get("success"):
+            print(f"Captcha task submission failed: {task_data}")
+            return None
+            
+        task_id = task_data["task"]["id"]
+        print(f"Captcha task submitted: {task_id}")
+        
+        # Poll for solution
+        start_time = time.time()
+        while time.time() - start_time < CAPTCHA_TIMEOUT:
+            time.sleep(3)
+            
+            result_resp = requests.get(
+                f"{CAPTCHA_API_BASE}/api/task-result",
+                params={"taskId": task_id},
+                timeout=10
+            )
+            
+            if not result_resp.ok:
+                continue
+                
+            result_data = result_resp.json()
+            if result_data.get("status") == "solved":
+                token = result_data.get("token")
+                print(f"Captcha solved: {token[:20]}...")
+                return token
+                
+        print("Captcha solving timed out")
+        return None
+        
+    except Exception as e:
+        print(f"Captcha solving error: {e}")
+        return None
 
 class ScraperClient(discord.Client):
     def __init__(self, invite_code, result_dict, *args, **kwargs):
@@ -46,6 +101,37 @@ class ScraperClient(discord.Client):
                 await invite.accept()
                 await asyncio.sleep(3)
                 guild = self.get_guild(guild_id)
+            except discord.HTTPException as e:
+                # Check if it's a captcha error
+                if e.status == 400 and "captcha" in str(e).lower():
+                    print("Captcha required, solving...")
+                    
+                    # Extract captcha details from the error
+                    # Discord captcha typically uses hcaptcha
+                    site_key = "4c672d35-0701-42b2-88c3-78380b0db560"  # Discord's hcaptcha site key
+                    rqdata = e.response.get("captcha_rqdata") if hasattr(e, 'response') and isinstance(e.response, dict) else None
+                    
+                    # Solve the captcha using our service (blocking call)
+                    captcha_token = await asyncio.to_thread(solve_captcha, site_key, rqdata)
+                    
+                    if not captcha_token:
+                        self.result["error"] = "Failed to solve captcha"
+                        await self.close()
+                        return
+                    
+                    # Retry with captcha token
+                    try:
+                        await invite.accept(captcha_key=captcha_token, captcha_rqtoken=rqdata)
+                        await asyncio.sleep(3)
+                        guild = self.get_guild(guild_id)
+                    except Exception as retry_e:
+                        self.result["error"] = f"Failed to join after captcha: {str(retry_e)}"
+                        await self.close()
+                        return
+                else:
+                    self.result["error"] = f"Failed to join guild: {str(e)}"
+                    await self.close()
+                    return
             except Exception as e:
                 self.result["error"] = f"Failed to join guild: {str(e)}"
                 await self.close()
