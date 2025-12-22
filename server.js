@@ -50,6 +50,130 @@ async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0) {
   }
 }
 
+// Captcha solver for DM operations
+async function solveDmCaptcha(sitekey, rqdata, rqtoken) {
+  const captchaApiBase = process.env.API_BASE || 'http://localhost:8204';
+  try {
+    // Submit captcha task
+    const taskResp = await fetch(`${captchaApiBase}/api/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteKey: sitekey,
+        rqdata: rqdata,
+        service: 'hcaptcha'
+      })
+    });
+    
+    const taskData = await taskResp.json();
+    const taskId = taskData.task?.id;
+    if (!taskId) throw new Error('Failed to get captcha task ID');
+    
+    // Poll for result (max 2 minutes)
+    const startTime = Date.now();
+    while (Date.now() - startTime < 120000) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const resultResp = await fetch(`${captchaApiBase}/api/task-result?taskId=${taskId}`);
+      const resultData = await resultResp.json();
+      
+      if (resultData.status === 'solved') {
+        return resultData.token;
+      } else if (resultData.status === 'expired' || resultData.status === 'failed') {
+        throw new Error(`Captcha ${resultData.status}`);
+      }
+    }
+    throw new Error('Captcha solving timeout');
+  } catch (err) {
+    throw new Error(`Captcha solve failed: ${err.message}`);
+  }
+}
+
+// Helper to join guild with token
+async function joinGuildWithToken(token, inviteCode, jobId) {
+  try {
+    const joinResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    });
+
+    // Handle captcha
+    if (joinResp.status === 400) {
+      const errorData = await joinResp.json().catch(() => ({}));
+      
+      // Check if already a member
+      if (errorData.message && errorData.message.includes('already a member')) {
+        throw new Error('already a member');
+      }
+      
+      if (errorData.captcha_key && errorData.captcha_sitekey) {
+        await logDmEvent(jobId, 'info', `🔐 Captcha required for guild join, solving...`);
+        
+        const captchaKey = await solveDmCaptcha(
+          errorData.captcha_sitekey,
+          errorData.captcha_rqdata,
+          errorData.captcha_rqtoken
+        );
+        
+        await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying join...`);
+        
+        // Retry with captcha
+        const retryResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': token,
+            'Content-Type': 'application/json',
+            'X-Captcha-Key': captchaKey,
+            'X-Captcha-Rqtoken': errorData.captcha_rqtoken,
+            'X-Captcha-Session-Id': errorData.captcha_session_id || ''
+          },
+          body: JSON.stringify({
+            captcha_key: captchaKey,
+            captcha_rqtoken: errorData.captcha_rqtoken,
+            captcha_session_id: errorData.captcha_session_id || ''
+          })
+        });
+        
+        if (!retryResp.ok) {
+          const retryErrorData = await retryResp.json().catch(() => ({}));
+          if (retryErrorData.message && retryErrorData.message.includes('already a member')) {
+            throw new Error('already a member');
+          }
+          const errorText = await retryResp.text();
+          throw new Error(`Failed after captcha: ${retryResp.status} ${errorText.substring(0, 100)}`);
+        }
+        
+        return true;
+      }
+    }
+
+    if (joinResp.status === 401) {
+      throw new Error('Token invalid (401)');
+    }
+
+    if (joinResp.status === 403) {
+      const errorData = await joinResp.json().catch(() => ({}));
+      if (errorData.code === 40007) {
+        throw new Error('Token banned from guild');
+      }
+      throw new Error(`Forbidden: ${JSON.stringify(errorData).substring(0, 100)}`);
+    }
+
+    if (!joinResp.ok) {
+      const errorText = await joinResp.text();
+      throw new Error(`Join failed: ${joinResp.status} ${errorText.substring(0, 100)}`);
+    }
+
+    return true;
+  } catch (err) {
+    throw err;
+  }
+}
+
 // Job executor - processes a DM job
 async function executeDmJob(jobId, userId) {
   const controller = new AbortController();
@@ -66,26 +190,94 @@ async function executeDmJob(jobId, userId) {
     const job = jobRes.rows[0];
     const { message, delay_min = 3000, delay_max = 5000, cap = 0 } = job;
 
-    // Fetch tokens
-    const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1', [userId]);
-    if (!tokensRes.rowCount) {
-      await logDmEvent(jobId, 'error', 'No tokens available');
-      await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
-      return;
-    }
-    
-    const tokens = tokensRes.rows.map(r => r.token);
-    await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokens.length} token(s)`);
-
-    // Fetch members
-    const membersRes = await pool.query('SELECT member_id FROM dm_members WHERE user_id=$1', [userId]);
+    // Fetch members and get guild info
+    const membersRes = await pool.query(
+      'SELECT member_id, guild_id FROM dm_members WHERE user_id=$1 LIMIT 1', 
+      [userId]
+    );
     if (!membersRes.rowCount) {
-      await logDmEvent(jobId, 'error', 'No members available. Please scrape members first.');
+      await logDmEvent(jobId, 'error', '❌ No members available. Please scrape members first.');
       await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
       return;
     }
     
-    const members = membersRes.rows.map(r => r.member_id);
+    const guildId = membersRes.rows[0].guild_id;
+    if (!guildId) {
+      await logDmEvent(jobId, 'error', '❌ No guild_id found in members data.');
+      await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
+      return;
+    }
+
+    await logDmEvent(jobId, 'info', `🎯 Target guild: ${guildId}`);
+
+    // Get invite code from job
+    const inviteCode = job.invite_code;
+    if (inviteCode) {
+      await logDmEvent(jobId, 'info', `📬 Using invite: ${inviteCode}`);
+    } else {
+      await logDmEvent(jobId, 'info', `⚠️ No invite code provided - tokens may already be in guild`);
+    }
+
+    // Fetch tokens (only valid/unknown, not invalid)
+    const tokensRes = await pool.query(
+      "SELECT id, token FROM dm_tokens WHERE user_id=$1 AND (status IS NULL OR status != 'invalid') ORDER BY created_at DESC", 
+      [userId]
+    );
+    if (!tokensRes.rowCount) {
+      await logDmEvent(jobId, 'error', '❌ No valid tokens available');
+      await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
+      return;
+    }
+    
+    const tokenData = tokensRes.rows;
+    await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokenData.length} token(s)`);
+
+    // Join guild with all tokens first (if invite code provided)
+    const validTokens = [];
+    
+    if (inviteCode) {
+      await logDmEvent(jobId, 'info', `🔗 Joining guild with tokens... (this may take a while)`);
+      
+      for (const tokenEntry of tokenData) {
+        const { id: tokenId, token } = tokenEntry;
+        try {
+          await joinGuildWithToken(token, inviteCode, jobId);
+          await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... joined guild`);
+          validTokens.push(tokenEntry);
+          
+          // Small delay between join attempts to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        } catch (err) {
+          if (err.message.includes('Token invalid')) {
+            await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
+            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid`);
+          } else if (err.message.includes('already a member')) {
+            await logDmEvent(jobId, 'info', `✓ Token ${token.substring(0, 10)}... already in guild`);
+            validTokens.push(tokenEntry);
+          } else {
+            await logDmEvent(jobId, 'error', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message}`);
+            // Still add to valid tokens - might already be in guild
+            validTokens.push(tokenEntry);
+          }
+        }
+      }
+    } else {
+      // No invite code - assume tokens are already in guild
+      await logDmEvent(jobId, 'info', `⏭️ Skipping guild join (no invite code provided)`);
+      validTokens.push(...tokenData);
+    }
+
+    if (validTokens.length === 0) {
+      await logDmEvent(jobId, 'error', '❌ No tokens available after guild join attempts');
+      await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
+      return;
+    }
+
+    await logDmEvent(jobId, 'info', `✅ ${validTokens.length} token(s) ready to send DMs`);
+
+    // Fetch all members
+    const allMembersRes = await pool.query('SELECT member_id FROM dm_members WHERE user_id=$1', [userId]);
+    const members = allMembersRes.rows.map(r => r.member_id);
     await logDmEvent(jobId, 'info', `👥 Loaded ${members.length} member(s)`);
 
     // Shuffle members if needed
@@ -103,7 +295,9 @@ async function executeDmJob(jobId, userId) {
 
     for (let i = 0; i < maxToSend && activeJobs.get(jobId)?.status === 'running'; i++) {
       const memberId = shuffledMembers[i];
-      const token = tokens[i % tokens.length]; // Rotate through tokens
+      const tokenEntry = validTokens[i % validTokens.length]; // Rotate through valid tokens only
+      const token = tokenEntry.token;
+      const tokenId = tokenEntry.id;
 
       try {
         // Create DM channel
@@ -117,6 +311,13 @@ async function executeDmJob(jobId, userId) {
           signal: controller.signal
         });
 
+        if (createDmResp.status === 401) {
+          // Mark token as invalid
+          await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
+          await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid (401)`);
+          throw new Error(`Failed to create DM: 401 Unauthorized - Token invalid`);
+        }
+
         if (!createDmResp.ok) {
           const errorText = await createDmResp.text();
           throw new Error(`Failed to create DM: ${createDmResp.status} ${errorText.substring(0, 100)}`);
@@ -125,8 +326,8 @@ async function executeDmJob(jobId, userId) {
         const dmChannel = await createDmResp.json();
         const channelId = dmChannel.id;
 
-        // Send message
-        const sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
+        // Send message (with captcha handling)
+        let sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
           method: 'POST',
           headers: {
             'Authorization': token,
@@ -136,9 +337,42 @@ async function executeDmJob(jobId, userId) {
           signal: controller.signal
         });
 
+        // Handle captcha if required
+        if (sendResp.status === 400) {
+          const errorData = await sendResp.json().catch(() => ({}));
+          if (errorData.captcha_key && errorData.captcha_sitekey) {
+            await logDmEvent(jobId, 'info', `🔐 Captcha required for ${memberId.substring(0, 8)}..., solving...`);
+            
+            const captchaKey = await solveDmCaptcha(
+              errorData.captcha_sitekey,
+              errorData.captcha_rqdata,
+              errorData.captcha_rqtoken
+            );
+            
+            await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying send...`);
+            
+            // Retry with captcha
+            sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
+              method: 'POST',
+              headers: {
+                'Authorization': token,
+                'Content-Type': 'application/json',
+                'X-Captcha-Key': captchaKey,
+                'X-Captcha-Rqtoken': errorData.captcha_rqtoken
+              },
+              body: JSON.stringify({ 
+                content: message,
+                captcha_key: captchaKey,
+                captcha_rqtoken: errorData.captcha_rqtoken
+              }),
+              signal: controller.signal
+            });
+          }
+        }
+
         if (!sendResp.ok) {
           const errorText = await sendResp.text();
-          throw new Error(`Failed to send message: ${sendResp.status} ${errorText.substring(0, 100)}`);
+          throw new Error(`Failed to send message: ${sendResp.status} ${errorText.substring(0, 150)}`);
         }
 
         sentCount++;
@@ -164,7 +398,7 @@ async function executeDmJob(jobId, userId) {
 
   } catch (err) {
     console.error(`[JOB ${jobId.substring(0,8)}] Fatal error:`, err);
-    await logDmEvent(jobId, 'error', `Fatal error: ${err.message}`);
+    await logDmEvent(jobId, 'error', `💥 Fatal error: ${err.message}`);
     await pool.query('UPDATE dm_jobs SET status=$1, updated_at=NOW() WHERE id=$2', ['failed', jobId]);
     activeJobs.delete(jobId);
   }
@@ -240,12 +474,16 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       sent_count INTEGER DEFAULT 0,
-      failed_count INTEGER DEFAULT 0
+      failed_count INTEGER DEFAULT 0,
+      invite_code TEXT,
+      guild_id TEXT
     );
   `);
   
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS sent_count INTEGER DEFAULT 0;`);
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS invite_code TEXT;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS guild_id TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dm_logs (
@@ -803,14 +1041,24 @@ app.post('/api/dm/user/proxy/bulk', requireDmUser, asyncHandler(async (req, res)
 }));
 
 app.post('/api/dm/job/start', requireDmUser, asyncHandler(async (req, res) => {
-  const { message, delay_min, delay_max, cap, randomize = true, rand_suffix = true } = req.body || {};
+  const { message, delay_min, delay_max, cap, randomize = true, rand_suffix = true, invite_code } = req.body || {};
   if (!message || !message.trim()) return res.status(400).json({ success: false, message: 'message required' });
+  
+  // Clean invite code
+  let cleanInvite = null;
+  if (invite_code) {
+    cleanInvite = invite_code
+      .replace(/https?:\/\/(www\.)?discord\.gg\//i, '')
+      .replace(/https?:\/\/discord\.com\/invite\//i, '')
+      .trim();
+  }
+  
   const id = uuidv4();
   const now = new Date();
   await pool.query(
-    `INSERT INTO dm_jobs (id, user_id, message, delay_min, delay_max, cap, randomize, rand_suffix, status, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'running',$9,$9)`,
-    [id, req.dmUserId, message.trim(), delay_min || null, delay_max || null, cap || null, !!randomize, !!rand_suffix, now]
+    `INSERT INTO dm_jobs (id, user_id, message, delay_min, delay_max, cap, randomize, rand_suffix, invite_code, status, created_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'running',$10,$10)`,
+    [id, req.dmUserId, message.trim(), delay_min || null, delay_max || null, cap || null, !!randomize, !!rand_suffix, cleanInvite, now]
   );
   // Provide counts to caller
   const tokensRes = await pool.query('SELECT COUNT(*) AS c FROM dm_tokens WHERE user_id=$1', [req.dmUserId]);
@@ -856,11 +1104,13 @@ app.get('/api/dm/job/status', requireDmUser, asyncHandler(async (req, res) => {
   const jobRes = await pool.query('SELECT * FROM dm_jobs WHERE id=$1 AND user_id=$2', [job_id, req.dmUserId]);
   if (!jobRes.rowCount) return res.status(404).json({ success: false, message: 'Job not found' });
   
-  // Get recent logs for this job (last 50 entries)
+  // Get recent logs for this job (last 100 entries)
   const logsRes = await pool.query(
-    'SELECT * FROM dm_logs WHERE job_id=$1 ORDER BY created_at DESC LIMIT 50',
+    'SELECT id, job_id, log_type, message, created_at FROM dm_logs WHERE job_id=$1 ORDER BY created_at ASC LIMIT 100',
     [job_id]
   );
+  
+  console.log(`[STATUS] Job ${job_id.substring(0, 8)}: ${jobRes.rows[0].status}, ${logsRes.rowCount} logs`);
   
   // Echo counts for UI
   const tokensRes = await pool.query('SELECT COUNT(*) AS c FROM dm_tokens WHERE user_id=$1', [req.dmUserId]);
@@ -868,7 +1118,7 @@ app.get('/api/dm/job/status', requireDmUser, asyncHandler(async (req, res) => {
   res.json({
     success: true,
     job: jobRes.rows[0],
-    logs: logsRes.rows.reverse(), // Oldest first for display
+    logs: logsRes.rows, // Already in chronological order
     tokens: Number(tokensRes.rows[0].c || 0),
     proxies: Number(proxiesRes.rows[0].c || 0)
   });

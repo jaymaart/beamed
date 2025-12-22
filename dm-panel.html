@@ -102,6 +102,8 @@
 
         <div style="margin-top:16px;" class="card">
             <h3>Mass DM</h3>
+            <label style="font-size:14px;">Server Invite (optional - use if tokens need to join)</label>
+            <input id="dm-invite" placeholder="discord.gg/... or invite code" style="margin-bottom:8px;">
             <label style="font-size:14px;">Custom message (will be randomized per token if enabled)</label>
             <textarea id="dm-message" placeholder="Enter your DM message..."></textarea>
             <div class="flex">
@@ -347,6 +349,7 @@
             const cap = Number(document.getElementById('dm-cap').value) || 0;
             const randomize = document.getElementById('dm-randomize').checked;
             const randSuffix = document.getElementById('dm-rand-suffix').checked;
+            const inviteCode = document.getElementById('dm-invite').value.trim();
 
             try {
                 const resp = await fetch('/api/dm/job/start', {
@@ -358,7 +361,8 @@
                         delay_max: dmax,
                         cap,
                         randomize,
-                        rand_suffix: randSuffix
+                        rand_suffix: randSuffix,
+                        invite_code: inviteCode || undefined
                     })
                 });
                 const data = await resp.json();
@@ -396,14 +400,22 @@
                 const job = data.job;
                 const logs = data.logs || [];
                 
+                console.log(`[DEBUG] Job status: ${job.status}, Total logs: ${logs.length}, Last count: ${lastLogCount}`);
+                
                 // Display new logs since last poll
                 const newLogs = logs.slice(lastLogCount);
-                newLogs.forEach(log => {
-                    const logType = log.log_type === 'success' ? 'success' : 
-                                  log.log_type === 'error' ? 'error' : 'info';
-                    logTerm(log.message, logType);
-                });
-                lastLogCount = logs.length;
+                if (newLogs.length > 0) {
+                    console.log(`[DEBUG] Displaying ${newLogs.length} new logs`);
+                    newLogs.forEach(log => {
+                        const logType = log.log_type === 'success' ? 'success' : 
+                                      log.log_type === 'error' ? 'error' : 'info';
+                        logTerm(log.message, logType);
+                    });
+                    lastLogCount = logs.length;
+                } else {
+                    // Show running status if no new logs
+                    logTerm(`⏳ Job running... (sent: ${job.sent_count || 0}, failed: ${job.failed_count || 0})`, 'info');
+                }
                 
                 // Check if job finished
                 if (['completed', 'stopped', 'failed'].includes(job.status) && !jobFinished) {
@@ -414,7 +426,7 @@
                     dmJobId = '';
                 }
             } catch (err) {
-                logTerm(err.message, 'error');
+                logTerm(`❌ Poll error: ${err.message}`, 'error');
             }
         }
 
