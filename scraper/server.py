@@ -431,6 +431,84 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None, proxies=None):
         "invalid_tokens": failed_tokens
     }
 
+async def join_guild(token, invite_code, proxy=None):
+    """Join a guild using discord.py-self with proper client session"""
+    result = {"success": False}
+    
+    try:
+        print(f"[JOIN] Logging in with token {token[:10]}...")
+        
+        # Create client with proxy if provided
+        kwargs = {}
+        if proxy:
+            connector = aiohttp.TCPConnector()
+            kwargs['connector'] = connector
+            kwargs['proxy'] = proxy
+        
+        client = discord.Client(**kwargs)
+        
+        @client.event
+        async def on_ready():
+            try:
+                print(f"[JOIN] Client ready as {client.user}")
+                
+                # Fetch and accept invite
+                invite = await client.fetch_invite(invite_code)
+                print(f"[JOIN] Found invite for {invite.guild.name if invite.guild else 'Unknown'}")
+                
+                # Accept the invite
+                await invite.accept()
+                print(f"[JOIN] Successfully joined guild!")
+                
+                result["success"] = True
+                result["guild_id"] = str(invite.guild.id) if invite.guild else None
+                
+            except discord.errors.HTTPException as e:
+                if "already a member" in str(e).lower():
+                    print(f"[JOIN] Already a member")
+                    result["success"] = True
+                    result["already_member"] = True
+                else:
+                    print(f"[JOIN] HTTP Error: {e}")
+                    result["error"] = str(e)
+            except Exception as e:
+                print(f"[JOIN] Error: {e}")
+                result["error"] = str(e)
+            finally:
+                await client.close()
+        
+        # Start client (will trigger on_ready)
+        await client.start(token)
+        
+    except discord.errors.LoginFailure:
+        result["error"] = "Invalid token"
+    except Exception as e:
+        result["error"] = str(e)
+    
+    return result
+
+@app.route('/join', methods=['POST'])
+def handle_join():
+    print(f"[JOIN] Received join request")
+    data = request.json
+    
+    if not data or 'token' not in data or 'invite' not in data:
+        return jsonify({"success": False, "error": "Missing token or invite"}), 400
+    
+    token = data['token']
+    invite = data['invite']
+    proxy = data.get('proxy')
+    
+    print(f"[JOIN] Joining invite {invite} with token {token[:10]}...{' (with proxy)' if proxy else ''}")
+    
+    try:
+        result = asyncio.run(join_guild(token, invite, proxy))
+        print(f"[JOIN] Result: {result.get('success')} - {result.get('error', 'OK')}")
+        return jsonify(result)
+    except Exception as e:
+        print(f"[JOIN] Server exception: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @app.route('/scrape', methods=['POST'])
 def handle_scrape():
     print(f"Received scrape request")

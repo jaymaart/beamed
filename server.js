@@ -186,106 +186,41 @@ async function solveDmCaptcha(sitekey, rqdata, rqtoken) {
 // Helper to join guild with token
 async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
   try {
-    const fingerprint = generateDiscordFingerprint();
-    const joinResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
+    // Use scraper service to join (it has full discord.py-self client with proper session)
+    const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://scraper:8600/scrape';
+    const joinUrl = scraperUrl.replace('/scrape', '/join');
+    
+    await logDmEvent(jobId, 'info', `🔗 Attempting to join guild via Discord client...`);
+    
+    const joinResp = await fetch(joinUrl, {
       method: 'POST',
-      headers: {
-        'Authorization': token,
-        'Content-Type': 'application/json',
-        'X-Super-Properties': fingerprint
-      },
-      body: JSON.stringify({}),
-      agent: proxyAgent
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        token: token,
+        invite: inviteCode
+      })
     });
 
-    // Read body once and reuse
-    const responseText = await joinResp.text();
-    let errorData = {};
-    try {
-      errorData = JSON.parse(responseText);
-    } catch (e) {
-      // Not JSON
-    }
-
-    // Handle captcha
-    if (joinResp.status === 400) {
-      // Check if already a member
-      if (errorData.message && errorData.message.includes('already a member')) {
-        throw new Error('already a member');
-      }
-      
-      if (errorData.captcha_key && errorData.captcha_sitekey) {
-        await logDmEvent(jobId, 'info', `🔐 Captcha required for guild join, solving...`);
-        
-        const captchaKey = await solveDmCaptcha(
-          errorData.captcha_sitekey,
-          errorData.captcha_rqdata,
-          errorData.captcha_rqtoken
-        );
-        
-        await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying join...`);
-        
-        // Retry with captcha (new fingerprint for retry)
-        const retryFingerprint = generateDiscordFingerprint();
-        const retryResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
-          method: 'POST',
-          headers: {
-            'Authorization': token,
-            'Content-Type': 'application/json',
-            'X-Super-Properties': retryFingerprint,
-            'X-Captcha-Key': captchaKey,
-            'X-Captcha-Rqtoken': errorData.captcha_rqtoken,
-            'X-Captcha-Session-Id': errorData.captcha_session_id || ''
-          },
-          body: JSON.stringify({
-            captcha_key: captchaKey,
-            captcha_rqtoken: errorData.captcha_rqtoken,
-            captcha_session_id: errorData.captcha_session_id || ''
-          }),
-          agent: proxyAgent
-        });
-        
-        if (!retryResp.ok) {
-          const retryText = await retryResp.text();
-          let retryErrorData = {};
-          try {
-            retryErrorData = JSON.parse(retryText);
-          } catch (e) {}
-          
-          // Log full Discord response for debugging
-          await logDmEvent(jobId, 'error', `📋 Discord Response: Status ${retryResp.status} | Code: ${retryErrorData.code || 'N/A'} | Message: ${retryErrorData.message || retryText.substring(0, 100)}`);
-          
-          if (retryErrorData.message && retryErrorData.message.includes('already a member')) {
-            throw new Error('already a member');
-          }
-          throw new Error(`Failed after captcha: ${retryResp.status} ${JSON.stringify(retryErrorData)}`);
-        }
-        
-        return true;
-      }
-      
-      // Other 400 errors
-      throw new Error(`Bad request: ${responseText.substring(0, 100)}`);
-    }
-
-    if (joinResp.status === 401) {
-      await logDmEvent(jobId, 'error', `📋 Discord Response: Status 401 | Message: ${errorData.message || 'Unauthorized'}`);
-      throw new Error('Token invalid (401)');
-    }
-
-    if (joinResp.status === 403) {
-      await logDmEvent(jobId, 'error', `📋 Discord Response: Status 403 | Code: ${errorData.code || 'N/A'} | Message: ${errorData.message || responseText.substring(0, 100)}`);
-      if (errorData.code === 40007) {
-        throw new Error('Token banned from guild');
-      }
-      throw new Error(`Forbidden: ${JSON.stringify(errorData)}`);
-    }
-
+    //Handle scraper service response
     if (!joinResp.ok) {
-      await logDmEvent(jobId, 'error', `📋 Discord Response: Status ${joinResp.status} | Code: ${errorData.code || 'N/A'} | Message: ${errorData.message || responseText.substring(0, 100)}`);
-      throw new Error(`Join failed: ${joinResp.status} ${JSON.stringify(errorData)}`);
+      const errorText = await joinResp.text();
+      let errorData = {};
+      try {
+        errorData = JSON.parse(errorText);
+      } catch (e) {}
+      
+      await logDmEvent(jobId, 'error', `📋 Join Service Response: ${errorData.error || errorText.substring(0, 100)}`);
+      throw new Error(errorData.error || `Join failed: ${joinResp.status}`);
     }
-
+    
+    const result = await joinResp.json();
+    
+    if (!result.success) {
+      await logDmEvent(jobId, 'error', `📋 Join failed: ${result.error || 'Unknown error'}`);
+      throw new Error(result.error || 'Join failed');
+    }
+    
+    await logDmEvent(jobId, 'info', `✅ Successfully joined guild`);
     return true;
   } catch (err) {
     throw err;
