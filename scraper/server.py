@@ -341,12 +341,27 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None, proxies=None):
         proxy = None
         if proxies:
             proxy_str = proxies[(idx - 1) % len(proxies)]
-            # Format proxy for aiohttp (http://user:pass@host:port or http://host:port)
+            # Format proxy for aiohttp: convert host:port:user:pass to http://user:pass@host:port
             if not proxy_str.startswith('http'):
-                proxy = f"http://{proxy_str}"
+                parts = proxy_str.split(':')
+                if len(parts) == 4:
+                    # host:port:user:pass
+                    host, port, user, password = parts
+                    proxy = f"http://{user}:{password}@{host}:{port}"
+                elif len(parts) == 2:
+                    # host:port (no auth)
+                    host, port = parts
+                    proxy = f"http://{host}:{port}"
+                else:
+                    print(f"⚠️ Invalid proxy format: {proxy_str}")
+                    proxy = None
             else:
                 proxy = proxy_str
-            print(f"[Token {idx}/{len(tokens)}] Using proxy: {proxy.split('@')[-1] if '@' in proxy else proxy}")
+            
+            if proxy:
+                # Show proxy without password
+                proxy_display = proxy.split('@')[-1] if '@' in proxy else proxy
+                print(f"[Token {idx}/{len(tokens)}] Using proxy: {proxy_display}")
         
         print(f"\n{'='*60}")
         print(f"[Token {idx}/{len(tokens)}] 🔑 Attempting scrape with {token[:10]}...")

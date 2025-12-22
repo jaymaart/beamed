@@ -424,21 +424,25 @@ async function executeDmJob(jobId, userId) {
             await logDmEvent(jobId, 'info', `✓ Token ${token.substring(0, 10)}... already in guild`);
             validTokens.push(tokenEntry);
           } 
-          // Token banned/invalid - mark as invalid
+          // Token banned/invalid - mark as invalid (401 = actually invalid)
           else if (err.message.includes('Token invalid') || err.message.includes('401')) {
             await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
             await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid`);
           } 
-          // 403 errors (banned, restricted, captcha failed) - don't use for DMing
-          else if (err.message.includes('403') || err.message.includes('Forbidden') || 
-                   err.message.includes('10008') || err.message.includes('Unknown Message')) {
-            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... failed to join (403/banned) - skipping DMing`);
-            // Don't add to validTokens - token is likely banned/restricted
+          // Code 10008 = Actually banned from Discord
+          else if (err.message.includes('10008') || err.message.includes('Unknown Message')) {
+            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... account banned (10008) - skipping`);
+            // Don't add to validTokens - account is actually banned
+          }
+          // Captcha failed after solving - likely bot detection, but token is fine
+          else if (err.message.includes('Failed after captcha') || err.message.includes('403')) {
+            await logDmEvent(jobId, 'info', `⚠️ Token ${token.substring(0, 10)}... captcha rejected (will try DMs anyway)`);
+            validTokens.push(tokenEntry); // Token is valid, just couldn't join - maybe already in guild
           } 
-          // Other errors - could be temporary, but don't risk it
+          // Other errors - assume token is fine, might already be in guild
           else {
-            await logDmEvent(jobId, 'error', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message.substring(0, 100)} - skipping`);
-            // Don't add to valid tokens - unknown error, too risky
+            await logDmEvent(jobId, 'info', `⚠️ Token ${token.substring(0, 10)}... join uncertain (${err.message.substring(0, 60)}...) - will try DMs`);
+            validTokens.push(tokenEntry); // Give it a chance - might already be in guild
           }
         }
       }
