@@ -367,13 +367,19 @@
                     return;
                 }
                 dmJobId = data.job_id;
+                lastLogCount = 0;
+                jobFinished = false;
                 logTerm(`Job started: ${dmJobId}. Tokens=${data.tokens} Proxies=${data.proxies}`);
                 if (dmPollTimer) clearInterval(dmPollTimer);
-                dmPollTimer = setInterval(pollJobStatus, 3000);
+                // Poll more frequently for logs (every 1.5 seconds)
+                dmPollTimer = setInterval(pollJobStatus, 1500);
             } catch (err) {
                 logTerm(err.message, 'error');
             }
         }
+
+        let lastLogCount = 0;
+        let jobFinished = false;
 
         async function pollJobStatus() {
             if (!dmJobId) return;
@@ -386,7 +392,27 @@
                     logTerm(data.message || 'Job status error', 'error');
                     return;
                 }
-                logTerm(`Job ${dmJobId} status: ${data.job.status} (tokens ${data.tokens}, proxies ${data.proxies})`);
+                
+                const job = data.job;
+                const logs = data.logs || [];
+                
+                // Display new logs since last poll
+                const newLogs = logs.slice(lastLogCount);
+                newLogs.forEach(log => {
+                    const logType = log.log_type === 'success' ? 'success' : 
+                                  log.log_type === 'error' ? 'error' : 'info';
+                    logTerm(log.message, logType);
+                });
+                lastLogCount = logs.length;
+                
+                // Check if job finished
+                if (['completed', 'stopped', 'failed'].includes(job.status) && !jobFinished) {
+                    jobFinished = true;
+                    logTerm(`📊 Final Status: ${job.status.toUpperCase()} - Sent: ${job.sent_count || 0}, Failed: ${job.failed_count || 0}`, 
+                           job.status === 'completed' ? 'success' : 'warn');
+                    if (dmPollTimer) clearInterval(dmPollTimer);
+                    dmJobId = '';
+                }
             } catch (err) {
                 logTerm(err.message, 'error');
             }

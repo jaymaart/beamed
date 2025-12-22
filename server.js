@@ -22,6 +22,154 @@ const pool = new Pool({ connectionString: DB_URL });
 // Helpers for Express async handlers
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+// Job tracking
+const activeJobs = new Map(); // jobId -> { status, controller }
+
+// Helper to log DM events to database
+async function logDmEvent(jobId, logType, message) {
+  try {
+    await pool.query(
+      'INSERT INTO dm_logs (id, job_id, log_type, message, created_at) VALUES ($1, $2, $3, $4, NOW())',
+      [uuidv4(), jobId, logType, message]
+    );
+    console.log(`[JOB ${jobId.substring(0,8)}] ${logType}: ${message}`);
+  } catch (err) {
+    console.error(`Failed to log DM event: ${err.message}`);
+  }
+}
+
+// Helper to update job counts
+async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0) {
+  try {
+    await pool.query(
+      'UPDATE dm_jobs SET sent_count = sent_count + $1, failed_count = failed_count + $2, updated_at = NOW() WHERE id = $3',
+      [sentDelta, failedDelta, jobId]
+    );
+  } catch (err) {
+    console.error(`Failed to update job stats: ${err.message}`);
+  }
+}
+
+// Job executor - processes a DM job
+async function executeDmJob(jobId, userId) {
+  const controller = new AbortController();
+  activeJobs.set(jobId, { status: 'running', controller });
+
+  try {
+    // Fetch job details
+    const jobRes = await pool.query('SELECT * FROM dm_jobs WHERE id=$1', [jobId]);
+    if (!jobRes.rowCount) {
+      await logDmEvent(jobId, 'error', 'Job not found');
+      return;
+    }
+    
+    const job = jobRes.rows[0];
+    const { message, delay_min = 3000, delay_max = 5000, cap = 0 } = job;
+
+    // Fetch tokens
+    const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1', [userId]);
+    if (!tokensRes.rowCount) {
+      await logDmEvent(jobId, 'error', 'No tokens available');
+      await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
+      return;
+    }
+    
+    const tokens = tokensRes.rows.map(r => r.token);
+    await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokens.length} token(s)`);
+
+    // Fetch members
+    const membersRes = await pool.query('SELECT member_id FROM dm_members WHERE user_id=$1', [userId]);
+    if (!membersRes.rowCount) {
+      await logDmEvent(jobId, 'error', 'No members available. Please scrape members first.');
+      await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
+      return;
+    }
+    
+    const members = membersRes.rows.map(r => r.member_id);
+    await logDmEvent(jobId, 'info', `👥 Loaded ${members.length} member(s)`);
+
+    // Shuffle members if needed
+    const shuffledMembers = [...members];
+    for (let i = shuffledMembers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffledMembers[i], shuffledMembers[j]] = [shuffledMembers[j], shuffledMembers[i]];
+    }
+
+    let sentCount = 0;
+    let failedCount = 0;
+    const maxToSend = cap > 0 ? Math.min(cap, shuffledMembers.length) : shuffledMembers.length;
+
+    await logDmEvent(jobId, 'info', `📨 Sending to ${maxToSend} member(s)...`);
+
+    for (let i = 0; i < maxToSend && activeJobs.get(jobId)?.status === 'running'; i++) {
+      const memberId = shuffledMembers[i];
+      const token = tokens[i % tokens.length]; // Rotate through tokens
+
+      try {
+        // Create DM channel
+        const createDmResp = await fetch('https://discord.com/api/v9/users/@me/channels', {
+          method: 'POST',
+          headers: {
+            'Authorization': token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ recipient_id: memberId }),
+          signal: controller.signal
+        });
+
+        if (!createDmResp.ok) {
+          const errorText = await createDmResp.text();
+          throw new Error(`Failed to create DM: ${createDmResp.status} ${errorText.substring(0, 100)}`);
+        }
+
+        const dmChannel = await createDmResp.json();
+        const channelId = dmChannel.id;
+
+        // Send message
+        const sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ content: message }),
+          signal: controller.signal
+        });
+
+        if (!sendResp.ok) {
+          const errorText = await sendResp.text();
+          throw new Error(`Failed to send message: ${sendResp.status} ${errorText.substring(0, 100)}`);
+        }
+
+        sentCount++;
+        await updateJobStats(jobId, 1, 0);
+        await logDmEvent(jobId, 'success', `✅ DM sent to ${memberId.substring(0, 8)}... (${sentCount}/${maxToSend})`);
+
+      } catch (err) {
+        failedCount++;
+        await updateJobStats(jobId, 0, 1);
+        await logDmEvent(jobId, 'error', `❌ Failed to DM ${memberId.substring(0, 8)}...: ${err.message}`);
+      }
+
+      // Delay between sends
+      const delay = Math.floor(Math.random() * (delay_max - delay_min + 1)) + delay_min;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    // Job complete
+    const finalStatus = activeJobs.get(jobId)?.status === 'running' ? 'completed' : 'stopped';
+    await pool.query('UPDATE dm_jobs SET status=$1, updated_at=NOW() WHERE id=$2', [finalStatus, jobId]);
+    await logDmEvent(jobId, 'info', `🏁 Job ${finalStatus}: ${sentCount} sent, ${failedCount} failed`);
+    activeJobs.delete(jobId);
+
+  } catch (err) {
+    console.error(`[JOB ${jobId.substring(0,8)}] Fatal error:`, err);
+    await logDmEvent(jobId, 'error', `Fatal error: ${err.message}`);
+    await pool.query('UPDATE dm_jobs SET status=$1, updated_at=NOW() WHERE id=$2', ['failed', jobId]);
+    activeJobs.delete(jobId);
+  }
+}
+
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -90,9 +238,26 @@ async function ensureSchema() {
       rand_suffix BOOLEAN DEFAULT true,
       status TEXT NOT NULL DEFAULT 'running',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0
     );
   `);
+  
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS sent_count INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dm_logs (
+      id UUID PRIMARY KEY,
+      job_id UUID NOT NULL,
+      log_type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_dm_logs_job_id ON dm_logs (job_id, created_at);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dm_members (
@@ -650,6 +815,12 @@ app.post('/api/dm/job/start', requireDmUser, asyncHandler(async (req, res) => {
   // Provide counts to caller
   const tokensRes = await pool.query('SELECT COUNT(*) AS c FROM dm_tokens WHERE user_id=$1', [req.dmUserId]);
   const proxiesRes = await pool.query('SELECT COUNT(*) AS c FROM dm_proxies WHERE user_id=$1', [req.dmUserId]);
+  
+  // Start job execution asynchronously
+  executeDmJob(id, req.dmUserId).catch(err => {
+    console.error(`Failed to start job ${id}:`, err);
+  });
+  
   res.json({
     success: true,
     job_id: id,
@@ -661,6 +832,17 @@ app.post('/api/dm/job/start', requireDmUser, asyncHandler(async (req, res) => {
 app.post('/api/dm/job/stop', requireDmUser, asyncHandler(async (req, res) => {
   const { job_id } = req.body || {};
   if (!job_id) return res.status(400).json({ success: false, message: 'job_id required' });
+  
+  // Stop the active job if running
+  const activeJob = activeJobs.get(job_id);
+  if (activeJob) {
+    activeJob.status = 'stopped';
+    if (activeJob.controller) {
+      activeJob.controller.abort();
+    }
+    await logDmEvent(job_id, 'info', '🛑 Job stopped by user');
+  }
+  
   const result = await pool.query(
     `UPDATE dm_jobs SET status='stopped', updated_at=NOW() WHERE id=$1 AND user_id=$2`,
     [job_id, req.dmUserId]
@@ -673,12 +855,20 @@ app.get('/api/dm/job/status', requireDmUser, asyncHandler(async (req, res) => {
   if (!job_id) return res.status(400).json({ success: false, message: 'job_id required' });
   const jobRes = await pool.query('SELECT * FROM dm_jobs WHERE id=$1 AND user_id=$2', [job_id, req.dmUserId]);
   if (!jobRes.rowCount) return res.status(404).json({ success: false, message: 'Job not found' });
+  
+  // Get recent logs for this job (last 50 entries)
+  const logsRes = await pool.query(
+    'SELECT * FROM dm_logs WHERE job_id=$1 ORDER BY created_at DESC LIMIT 50',
+    [job_id]
+  );
+  
   // Echo counts for UI
   const tokensRes = await pool.query('SELECT COUNT(*) AS c FROM dm_tokens WHERE user_id=$1', [req.dmUserId]);
   const proxiesRes = await pool.query('SELECT COUNT(*) AS c FROM dm_proxies WHERE user_id=$1', [req.dmUserId]);
   res.json({
     success: true,
     job: jobRes.rows[0],
+    logs: logsRes.rows.reverse(), // Oldest first for display
     tokens: Number(tokensRes.rows[0].c || 0),
     proxies: Number(proxiesRes.rows[0].c || 0)
   });
