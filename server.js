@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const WebSocket = require('ws');
 const { Pool } = require('pg');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const { Client } = require('discord.js-selfbot-v13');
 
 // Config
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
@@ -116,30 +117,50 @@ async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0, skippedDelt
   }
 }
 
-// Helper to validate a Discord token
-async function validateToken(token, tokenId, proxyAgent = null) {
-  try {
-    const resp = await fetch('https://discord.com/api/v9/users/@me', {
-      headers: { 
-        'Authorization': token,
-        'X-Super-Properties': generateDiscordFingerprint()
-      },
-      agent: proxyAgent
+// Helper to create and login a Discord client
+async function createDiscordClient(token, proxy = null) {
+  const client = new Client({
+    checkUpdate: false,
+    ws: { properties: { browser: 'Discord Client' } }
+  });
+  
+  // Set proxy if provided
+  if (proxy) {
+    client.options.proxy = proxy;
+    client.options.http.agent = createProxyAgent(proxy);
+  }
+  
+  await client.login(token);
+  
+  // Wait for ready
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Client ready timeout')), 30000);
+    client.once('ready', () => {
+      clearTimeout(timeout);
+      resolve();
     });
-    
-    if (resp.status === 401) {
-      await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
-      return { valid: false, reason: 'Invalid token (401)' };
-    }
-    
-    if (!resp.ok) {
-      return { valid: false, reason: `HTTP ${resp.status}` };
-    }
-    
-    const userData = await resp.json();
+  });
+  
+  return client;
+}
+
+// Helper to validate a Discord token using discord.js
+async function validateToken(token, tokenId, proxy = null) {
+  let client = null;
+  try {
+    client = await createDiscordClient(token, proxy);
+    const username = client.user.username;
     await pool.query("UPDATE dm_tokens SET status='valid' WHERE id=$1", [tokenId]);
-    return { valid: true, username: userData.username };
+    await client.destroy();
+    return { valid: true, username };
   } catch (err) {
+    if (client) await client.destroy().catch(() => {});
+    
+    if (err.message.includes('Improper token') || err.message.includes('401')) {
+      await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
+      return { valid: false, reason: 'Invalid token' };
+    }
+    
     return { valid: false, reason: err.message };
   }
 }
@@ -183,104 +204,100 @@ async function solveDmCaptcha(sitekey, rqdata, rqtoken) {
   }
 }
 
-// Helper to join guild with token
-async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
+// Helper to send DM using discord.js client
+async function sendDmWithClient(client, userId, message) {
   try {
-    const fingerprint = generateDiscordFingerprint();
-    const joinResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': token,
-        'Content-Type': 'application/json',
-        'X-Super-Properties': fingerprint
-      },
-      body: JSON.stringify({}),
-      agent: proxyAgent
-    });
-
-    // Read body once and reuse
-    const responseText = await joinResp.text();
-    let errorData = {};
-    try {
-      errorData = JSON.parse(responseText);
-    } catch (e) {
-      // Not JSON
+    // Fetch the user first
+    const user = await client.users.fetch(userId);
+    
+    // Send the DM
+    await user.send(message);
+    
+    return { success: true };
+  } catch (err) {
+    // Check for specific error codes
+    if (err.code === 50007 || err.message.includes('Cannot send messages to this user')) {
+      return { success: false, skipped: true, reason: 'DMs disabled' };
     }
+    if (err.code === 340002 || err.message.includes('Access to sending DMs has been limited')) {
+      return { success: false, skipped: true, reason: 'DM access limited' };
+    }
+    if (err.code === 401 || err.message.includes('Unauthorized')) {
+      return { success: false, invalid: true, reason: 'Token invalid' };
+    }
+    if (err.code === 429 || err.message.includes('rate limit')) {
+      const retryAfter = err.retryAfter || 60;
+      return { success: false, rateLimit: true, retryAfter, reason: 'Rate limited' };
+    }
+    
+    // Other errors
+    return { success: false, reason: err.message };
+  }
+}
 
-    // Handle captcha
-    if (joinResp.status === 400) {
-      // Check if already a member
-      if (errorData.message && errorData.message.includes('already a member')) {
-        throw new Error('already a member');
-      }
-      
-      if (errorData.captcha_key && errorData.captcha_sitekey) {
+// Helper to join guild with token using discord.js
+async function joinGuildWithToken(client, inviteCode, jobId) {
+  try {
+    // Fetch the invite first
+    const invite = await client.fetchInvite(inviteCode);
+    
+    // Check if already in the guild
+    const guildId = invite.guild?.id;
+    if (guildId && client.guilds.cache.has(guildId)) {
+      throw new Error('already a member');
+    }
+    
+    // Try to accept the invite
+    try {
+      await invite.acceptInvite();
+      return true;
+    } catch (err) {
+      // Check for captcha requirement
+      if (err.message.includes('captcha') || err.code === 'CAPTCHA_REQUIRED') {
         await logDmEvent(jobId, 'info', `🔐 Captcha required for guild join, solving...`);
         
-        const captchaKey = await solveDmCaptcha(
-          errorData.captcha_sitekey,
-          errorData.captcha_rqdata,
-          errorData.captcha_rqtoken
-        );
-        
-        await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying join...`);
-        
-        // Retry with captcha (new fingerprint for retry)
-        const retryFingerprint = generateDiscordFingerprint();
-        const retryResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
-          method: 'POST',
-          headers: {
-            'Authorization': token,
-            'Content-Type': 'application/json',
-            'X-Super-Properties': retryFingerprint,
-            'X-Captcha-Key': captchaKey,
-            'X-Captcha-Rqtoken': errorData.captcha_rqtoken,
-            'X-Captcha-Session-Id': errorData.captcha_session_id || ''
-          },
-          body: JSON.stringify({
-            captcha_key: captchaKey,
-            captcha_rqtoken: errorData.captcha_rqtoken,
-            captcha_session_id: errorData.captcha_session_id || ''
-          }),
-          agent: proxyAgent
-        });
-        
-        if (!retryResp.ok) {
-          const retryText = await retryResp.text();
-          let retryErrorData = {};
-          try {
-            retryErrorData = JSON.parse(retryText);
-          } catch (e) {}
+        // Extract captcha data from error
+        const captchaData = err.captcha || {};
+        if (captchaData.captcha_sitekey) {
+          const captchaKey = await solveDmCaptcha(
+            captchaData.captcha_sitekey,
+            captchaData.captcha_rqdata,
+            captchaData.captcha_rqtoken
+          );
           
-          if (retryErrorData.message && retryErrorData.message.includes('already a member')) {
-            throw new Error('already a member');
-          }
-          throw new Error(`Failed after captcha: ${retryResp.status} ${retryText.substring(0, 100)}`);
+          await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying join...`);
+          
+          // Retry with captcha solution
+          await invite.acceptInvite({
+            captchaKey,
+            captchaRqtoken: captchaData.captcha_rqtoken
+          });
+          
+          return true;
         }
         
-        return true;
+        throw new Error('Captcha required but unable to solve');
       }
       
-      // Other 400 errors
-      throw new Error(`Bad request: ${responseText.substring(0, 100)}`);
-    }
-
-    if (joinResp.status === 401) {
-      throw new Error('Token invalid (401)');
-    }
-
-    if (joinResp.status === 403) {
-      if (errorData.code === 40007) {
-        throw new Error('Token banned from guild');
+      // Check for specific error messages
+      if (err.message.includes('already a member')) {
+        throw new Error('already a member');
       }
-      throw new Error(`Forbidden: ${responseText.substring(0, 100)}`);
+      if (err.message.includes('Unauthorized') || err.code === 401) {
+        throw new Error('Token invalid (401)');
+      }
+      if (err.message.includes('Forbidden') || err.code === 403) {
+        if (err.message.includes('10008') || err.message.includes('Unknown Message')) {
+          throw new Error('Account banned (10008)');
+        }
+        throw new Error(`Forbidden: ${err.message}`);
+      }
+      if (err.message.includes('340015') || err.message.includes('Access to joining new servers')) {
+        throw new Error('Access to joining new servers has been limited (340015)');
+      }
+      
+      throw err;
     }
-
-    if (!joinResp.ok) {
-      throw new Error(`Join failed: ${joinResp.status} ${responseText.substring(0, 100)}`);
-    }
-
-    return true;
   } catch (err) {
     throw err;
   }
@@ -359,57 +376,60 @@ async function executeDmJob(jobId, userId) {
     await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokenData.length} token(s) and ${proxies.length} proxy/proxies`);
     await logDmEvent(jobId, 'info', `🔐 Using randomized fingerprints for all requests`);
 
-    // Step 1: Validate all tokens first
-    await logDmEvent(jobId, 'info', `🔍 Validating tokens...`);
-    const validatedTokens = [];
+    // Step 1: Create and validate Discord clients for all tokens
+    await logDmEvent(jobId, 'info', `🔍 Creating Discord clients and validating tokens...`);
+    const validatedClients = [];
     
     for (let idx = 0; idx < tokenData.length; idx++) {
       const tokenEntry = tokenData[idx];
       const { id: tokenId, token } = tokenEntry;
       
-      // Rotate through proxies for validation
+      // Rotate through proxies
       const proxyString = proxies.length > 0 ? proxies[idx % proxies.length] : null;
-      const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
       
-      const validation = await validateToken(token, tokenId, proxyAgent);
-      
-      if (validation.valid) {
-        await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... is valid (${validation.username})`);
-        validatedTokens.push(tokenEntry);
-      } else {
-        await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... is invalid: ${validation.reason}`);
+      try {
+        const client = await createDiscordClient(token, proxyString);
+        const username = client.user.username;
+        
+        await pool.query("UPDATE dm_tokens SET status='valid' WHERE id=$1", [tokenId]);
+        await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... is valid (${username})`);
+        
+        validatedClients.push({ ...tokenEntry, client });
+      } catch (err) {
+        if (err.message.includes('Improper token') || err.message.includes('401')) {
+          await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
+          await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... is invalid`);
+        } else {
+          await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... failed: ${err.message}`);
+        }
       }
       
       // Small delay to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    if (validatedTokens.length === 0) {
+    if (validatedClients.length === 0) {
       await logDmEvent(jobId, 'error', '❌ No valid tokens available after validation');
       await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
       return;
     }
 
-    await logDmEvent(jobId, 'info', `✅ ${validatedTokens.length}/${tokenData.length} tokens are valid`);
+    await logDmEvent(jobId, 'info', `✅ ${validatedClients.length}/${tokenData.length} tokens are valid`);
 
-    // Step 2: Join guild with validated tokens (if invite code provided)
-    const validTokens = [];
+    // Step 2: Join guild with validated clients (if invite code provided)
+    const validClients = [];
     
     if (invite_code) {
       await logDmEvent(jobId, 'info', `🔗 Joining guild with tokens... (this may take a while)`);
       
-      for (let idx = 0; idx < validatedTokens.length; idx++) {
-        const tokenEntry = validatedTokens[idx];
-        const { id: tokenId, token } = tokenEntry;
-        
-        // Rotate through proxies for guild join
-        const proxyString = proxies.length > 0 ? proxies[idx % proxies.length] : null;
-        const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
+      for (let idx = 0; idx < validatedClients.length; idx++) {
+        const clientEntry = validatedClients[idx];
+        const { id: tokenId, token, client } = clientEntry;
         
         try {
-          await joinGuildWithToken(token, invite_code, jobId, proxyAgent);
+          await joinGuildWithToken(client, invite_code, jobId);
           await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... joined guild`);
-          validTokens.push(tokenEntry);
+          validClients.push(clientEntry);
           
           // Small delay between join attempts to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 3000));
@@ -417,47 +437,57 @@ async function executeDmJob(jobId, userId) {
           // Check for "server join restricted" error (code 340015) - account is fine, just can't join servers
           if (err.message.includes('340015') || err.message.includes('Access to joining new servers')) {
             await logDmEvent(jobId, 'info', `⏭️ Token ${token.substring(0, 10)}... restricted from joining servers (will try DMs anyway)`);
-            validTokens.push(tokenEntry); // Still add - can DM even if can't join
+            validClients.push(clientEntry); // Still add - can DM even if can't join
           } 
           // Already a member - can definitely DM
           else if (err.message.includes('already a member')) {
             await logDmEvent(jobId, 'info', `✓ Token ${token.substring(0, 10)}... already in guild`);
-            validTokens.push(tokenEntry);
+            validClients.push(clientEntry);
           } 
-          // Token banned/invalid - mark as invalid
+          // Token banned/invalid - mark as invalid (401 = actually invalid)
           else if (err.message.includes('Token invalid') || err.message.includes('401')) {
             await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
             await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid`);
+            await client.destroy().catch(() => {});
           } 
-          // 403 errors (banned, restricted, captcha failed) - don't use for DMing
-          else if (err.message.includes('403') || err.message.includes('Forbidden') || 
-                   err.message.includes('10008') || err.message.includes('Unknown Message')) {
-            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... failed to join (403/banned) - skipping DMing`);
-            // Don't add to validTokens - token is likely banned/restricted
+          // Code 10008 = Actually banned from Discord
+          else if (err.message.includes('10008') || err.message.includes('Unknown Message')) {
+            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... account banned (10008) - skipping`);
+            await client.destroy().catch(() => {});
+            // Don't add to validClients - account is actually banned
+          }
+          // Captcha failed after solving - likely bot detection, but token is fine
+          else if (err.message.includes('Failed after captcha') || err.message.includes('403')) {
+            await logDmEvent(jobId, 'info', `⚠️ Token ${token.substring(0, 10)}... captcha rejected (will try DMs anyway)`);
+            validClients.push(clientEntry); // Token is valid, just couldn't join - maybe already in guild
           } 
-          // Other errors - could be temporary, but don't risk it
+          // Other errors - assume token is fine, might already be in guild
           else {
-            await logDmEvent(jobId, 'error', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message.substring(0, 100)} - skipping`);
-            // Don't add to valid tokens - unknown error, too risky
+            await logDmEvent(jobId, 'info', `⚠️ Token ${token.substring(0, 10)}... join uncertain (${err.message.substring(0, 60)}...) - will try DMs`);
+            validClients.push(clientEntry); // Give it a chance - might already be in guild
           }
         }
       }
     } else {
-      // No invite code - use validated tokens directly
+      // No invite code - use validated clients directly
       await logDmEvent(jobId, 'info', `⏭️ Skipping guild join (no invite code provided)`);
-      validTokens.push(...validatedTokens);
+      validClients.push(...validatedClients);
     }
 
-    if (validTokens.length === 0) {
+    if (validClients.length === 0) {
       await logDmEvent(jobId, 'error', '❌ No tokens available after guild join attempts');
+      // Cleanup all clients
+      for (const entry of validatedClients) {
+        await entry.client.destroy().catch(() => {});
+      }
       await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
       return;
     }
 
-    await logDmEvent(jobId, 'info', `✅ ${validTokens.length} token(s) ready to send DMs`);
+    await logDmEvent(jobId, 'info', `✅ ${validClients.length} token(s) ready to send DMs`);
     
-    if (validTokens.length < 3) {
-      await logDmEvent(jobId, 'info', `⚠️ Warning: Only ${validTokens.length} token(s) available. Consider adding more tokens to avoid rate limits.`);
+    if (validClients.length < 3) {
+      await logDmEvent(jobId, 'info', `⚠️ Warning: Only ${validClients.length} token(s) available. Consider adding more tokens to avoid rate limits.`);
     }
 
     // Fetch all members
