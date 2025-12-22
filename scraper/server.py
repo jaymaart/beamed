@@ -31,30 +31,40 @@ class ScraperClient(discord.Client):
             await self.close()
             return
 
-        guild = invite.guild
-        if isinstance(guild, discord.Object):
+        guild_id = invite.guild.id if invite.guild else None
+        if not guild_id:
+            self.result["error"] = "Invite does not contain guild information"
+            await self.close()
+            return
+
+        # Try to get the guild from cache first
+        guild = self.get_guild(guild_id)
+        
+        # If not in cache, we need to join via the invite
+        if not guild:
             try:
                 await invite.accept()
-                await asyncio.sleep(2)
-                guild = self.get_guild(invite.guild.id)
+                await asyncio.sleep(3)
+                guild = self.get_guild(guild_id)
             except Exception as e:
                 self.result["error"] = f"Failed to join guild: {str(e)}"
                 await self.close()
                 return
-
-        if not guild:
-            guild = self.get_guild(invite.guild.id)
         
         if not guild:
-            self.result["error"] = f"Could not resolve guild {invite.guild.id} after join attempt"
+            self.result["error"] = f"Could not access guild {guild_id} after join"
             await self.close()
             return
 
         members_data = []
         try:
+            # Chunk the guild to load all members
+            if not guild.chunked:
+                await guild.chunk()
+            
             for member in guild.members:
                 if not member.bot:
-                    members_data.append(member.id)
+                    members_data.append(str(member.id))
             
             self.result["success"] = True
             self.result["guild_id"] = str(guild.id)
