@@ -12,79 +12,68 @@ sys.stdout.reconfigure(encoding='utf-8')
 app = Flask(__name__)
 
 class ScraperClient(discord.Client):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, invite_code, result_dict, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.scrape_result = None
-        self.scrape_error = None
-        self.target_invite = None
+        self.invite_code = invite_code
+        self.result = result_dict
 
-    async def on_ready(self):
-        # We handle the logic in the scrape task, but need on_ready to fire
-        pass
+    async def setup_hook(self):
+        # This runs when the client is setting up, after the loop is created
+        asyncio.create_task(self.scrape_logic())
+
+    async def scrape_logic(self):
+        await self.wait_until_ready()
+        
+        try:
+            invite = await self.fetch_invite(self.invite_code)
+        except discord.NotFound:
+            self.result["error"] = "Invite not found"
+            await self.close()
+            return
+
+        guild = invite.guild
+        if isinstance(guild, discord.Object):
+            try:
+                await invite.accept()
+                await asyncio.sleep(2)
+                guild = self.get_guild(invite.guild.id)
+            except Exception as e:
+                self.result["error"] = f"Failed to join guild: {str(e)}"
+                await self.close()
+                return
+
+        if not guild:
+            guild = self.get_guild(invite.guild.id)
+        
+        if not guild:
+            self.result["error"] = f"Could not resolve guild {invite.guild.id} after join attempt"
+            await self.close()
+            return
+
+        members_data = []
+        try:
+            if not guild.chunked:
+                await guild.chunk()
+            
+            for member in guild.members:
+                members_data.append(member.id)
+                
+            self.result["success"] = True
+            self.result["guild_id"] = str(guild.id)
+            self.result["members"] = members_data
+            self.result["count"] = len(members_data)
+            
+        except Exception as e:
+            self.result["error"] = f"Member scrape failed: {str(e)}"
+        
+        await self.close()
 
 async def run_scrape(token, invite_code):
-    client = ScraperClient()
     result = {"success": False}
     
     try:
-        # We need to run the client in a way that allows us to execute our logic
-        # Since client.start() blocks, we'll wrap the logic in a task that waits for ready
-        
-        async def scrape_logic():
-            await client.wait_until_ready()
-            
-            try:
-                invite = await client.fetch_invite(invite_code)
-            except discord.NotFound:
-                result["error"] = "Invite not found"
-                await client.close()
-                return
-
-            guild = invite.guild
-            if isinstance(guild, discord.Object):
-                try:
-                    await invite.accept()
-                    await asyncio.sleep(2)
-                    guild = client.get_guild(invite.guild.id)
-                except Exception as e:
-                    result["error"] = f"Failed to join guild: {str(e)}"
-                    await client.close()
-                    return
-
-            if not guild:
-                # Try to find it in cache if we were already in it
-                guild = client.get_guild(invite.guild.id)
-            
-            if not guild:
-                result["error"] = f"Could not resolve guild {invite.guild.id} after join attempt"
-                await client.close()
-                return
-
-            members_data = []
-            try:
-                # This might take a while for large servers
-                if not guild.chunked:
-                    await guild.chunk()
-                
-                for member in guild.members:
-                    members_data.append(member.id)
-                    
-                result["success"] = True
-                result["guild_id"] = str(guild.id)
-                result["members"] = members_data
-                result["count"] = len(members_data)
-                
-            except Exception as e:
-                result["error"] = f"Member scrape failed: {str(e)}"
-            
-            await client.close()
-
-        # Create the logic task
-        client.loop.create_task(scrape_logic())
-        
-        # Start the client (blocks until closed)
+        client = ScraperClient(invite_code, result)
         await client.start(token)
-        
     except Exception as e:
         if not result.get("error"):
             result["error"] = f"Client exception: {str(e)}"
