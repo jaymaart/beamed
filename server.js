@@ -509,7 +509,7 @@ async function executeDmJob(jobId, userId) {
     const tokenStats = new Map(); // Track stats per token: { errorCount, sentCount, rateLimited }
     
     // Initialize token stats
-    validClients.forEach(t => {
+    validTokens.forEach(t => {
       tokenStats.set(t.id, { errorCount: 0, sentCount: 0, rateLimited: false });
     });
 
@@ -519,13 +519,13 @@ async function executeDmJob(jobId, userId) {
     for (let i = 0; i < maxToSend && activeJobs.get(jobId)?.status === 'running'; i++) {
       const memberId = shuffledMembers[i];
       
-      // Find next valid client (skip invalid, error-prone, capped, and rate-limited tokens)
-      let clientEntry = null;
-      let tokenIndex = i % validClients.length;
+      // Find next valid token (skip invalid, error-prone, capped, and rate-limited tokens)
+      let tokenEntry = null;
+      let tokenIndex = i % validTokens.length;
       let attempts = 0;
       
-      while (!clientEntry && attempts < validClients.length) {
-        const candidate = validClients[tokenIndex];
+      while (!tokenEntry && attempts < validTokens.length) {
+        const candidate = validTokens[tokenIndex];
         const stats = tokenStats.get(candidate.id);
         
         // Check if token should be skipped
@@ -535,7 +535,7 @@ async function executeDmJob(jobId, userId) {
         const isRateLimited = stats.rateLimited;
         
         if (!isInvalid && !tooManyErrors && !reachedCap && !isRateLimited) {
-          clientEntry = candidate;
+          tokenEntry = candidate;
         } else {
           if (tooManyErrors && attempts === 0) {
             await logDmEvent(jobId, 'info', `⏭️ Skipping token ${candidate.token.substring(0, 10)}... (${stats.errorCount} errors)`);
@@ -546,56 +546,64 @@ async function executeDmJob(jobId, userId) {
           if (isRateLimited && attempts === 0) {
             await logDmEvent(jobId, 'info', `⏭️ Skipping token ${candidate.token.substring(0, 10)}... (rate limited)`);
           }
-          tokenIndex = (tokenIndex + 1) % validClients.length;
+          tokenIndex = (tokenIndex + 1) % validTokens.length;
           attempts++;
         }
       }
       
-      if (!clientEntry) {
+      if (!tokenEntry) {
         await logDmEvent(jobId, 'error', '❌ All tokens are invalid, rate-limited, or reached their cap. Stopping job.');
         break;
       }
       
-      const token = clientEntry.token;
-      const tokenId = clientEntry.id;
-      const client = clientEntry.client;
+      const token = tokenEntry.token;
+      const tokenId = tokenEntry.id;
       
       // Log which token we're using every 10 messages
       if (i % 10 === 0 && i > 0) {
-        await logDmEvent(jobId, 'info', `📊 Progress: ${sentCount} sent, ${failedCount} failed. Using token ${tokenIndex + 1}/${validClients.length}`);
+        await logDmEvent(jobId, 'info', `📊 Progress: ${sentCount} sent, ${failedCount} failed. Using token ${tokenIndex + 1}/${validTokens.length}`);
       }
 
       try {
-        // Prepare message with randomization if enabled
-        let finalMessage = message;
-        if (RANDOMIZE_MESSAGES && RANDOM_STRING_END_OF_MESSAGE) {
-          const randomStr = Math.random().toString(36).substring(2, 8);
-          finalMessage = `${message} ${randomStr}`;
-        }
+        // Get proxy for this request (rotate through proxies)
+        const proxyString = proxies.length > 0 ? proxies[i % proxies.length] : null;
+        const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
         
-        // Send DM using discord.js client
-        const result = await sendDmWithClient(client, memberId, finalMessage);
+        // Create DM channel (new fingerprint for each request)
+        const dmFingerprint = generateDiscordFingerprint();
+        const createDmResp = await fetch('https://discord.com/api/v9/users/@me/channels', {
+          method: 'POST',
+          headers: {
+            'Authorization': token,
+            'Content-Type': 'application/json',
+            'X-Super-Properties': dmFingerprint
+          },
+          body: JSON.stringify({ recipient_id: memberId }),
+          signal: controller.signal,
+          agent: proxyAgent
+        });
 
-        if (result.invalid) {
+        if (createDmResp.status === 401) {
           // Mark token as invalid and add to skip list
           invalidTokenIds.add(tokenId);
           await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
           await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid (401) - will use next token`);
           
           // Check how many tokens are left
-          const remainingTokens = validClients.length - invalidTokenIds.size;
+          const remainingTokens = validTokens.length - invalidTokenIds.size;
           if (remainingTokens === 0) {
             await logDmEvent(jobId, 'error', `❌ All tokens are now invalid. Job cannot continue.`);
           } else {
             await logDmEvent(jobId, 'info', `ℹ️ ${remainingTokens} token(s) still available`);
           }
           
-          throw new Error(`Token invalid`);
+          throw new Error(`Failed to create DM: 401 Unauthorized`);
         }
 
-        if (result.rateLimit) {
+        if (createDmResp.status === 429) {
           // Rate limited - mark token and sleep
-          const retryAfter = result.retryAfter || 60; // seconds
+          const errorData = await createDmResp.json().catch(() => ({}));
+          const retryAfter = errorData.retry_after || 60; // seconds
           const stats = tokenStats.get(tokenId);
           stats.rateLimited = true;
           
@@ -614,25 +622,136 @@ async function executeDmJob(jobId, userId) {
           throw new Error(`Rate limited (slept ${sleepMinutes}m)`);
         }
 
-        if (result.skipped) {
-          // Silent success - user has DMs disabled, not a token error
-          // Still counts as API usage for rate limiting
-          const stats = tokenStats.get(tokenId);
-          stats.sentCount++; // Increment token usage (consumes rate limit quota)
-          stats.errorCount = 0; // Don't count as error
+        if (!createDmResp.ok) {
+          const errorText = await createDmResp.text();
+          let errorData = {};
+          try {
+            errorData = JSON.parse(errorText);
+          } catch (e) {}
           
-          await updateJobStats(jobId, 0, 0, 1); // Increment skipped count
-          // Don't log to reduce spam
+          // Check for "Cannot send messages to this user" error (code 50007 or 340002)
+          if (errorData.code === 50007 || errorData.code === 340002 || 
+              (errorData.message && (errorData.message.includes('Cannot send messages to this user') || 
+                                    errorData.message.includes('Access to sending DMs')))) {
+            // Silent success - user has DMs disabled, not a token error
+            // Still counts as API usage for rate limiting
+            const stats = tokenStats.get(tokenId);
+            stats.sentCount++; // Increment token usage (consumes rate limit quota)
+            stats.errorCount = 0; // Don't count as error
+            
+            await updateJobStats(jobId, 0, 0, 1); // Increment skipped count
+            // Don't log this to reduce spam
+            
+            // Apply normal delay (3-5 seconds) - we still hit Discord's API
+            const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
           
-          // Apply normal delay (3-5 seconds) - we still hit Discord's API
-          const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
-          await new Promise(resolve => setTimeout(resolve, delay));
-          continue;
+          throw new Error(`Failed to create DM: ${createDmResp.status} ${errorText.substring(0, 100)}`);
         }
-        
-        if (!result.success) {
-          // Other errors
-          throw new Error(`Failed to send DM: ${result.reason}`);
+
+        const dmChannel = await createDmResp.json();
+        const channelId = dmChannel.id;
+
+        // Send message (with captcha handling - new fingerprint)
+        const sendFingerprint = generateDiscordFingerprint();
+        let sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': token,
+            'Content-Type': 'application/json',
+            'X-Super-Properties': sendFingerprint
+          },
+          body: JSON.stringify({ content: message }),
+          signal: controller.signal,
+          agent: proxyAgent
+        });
+
+        // Handle captcha if required
+        if (sendResp.status === 400) {
+          const errorText = await sendResp.text();
+          let errorData = {};
+          try {
+            errorData = JSON.parse(errorText);
+          } catch (e) {}
+          
+          // Check for DMs disabled on 400 too
+          if (errorData.code === 340002 || errorData.code === 50007) {
+            // Silent success - still counts as API usage
+            const stats = tokenStats.get(tokenId);
+            stats.sentCount++; // Increment token usage (consumes rate limit quota)
+            stats.errorCount = 0;
+            
+            await updateJobStats(jobId, 0, 0, 1); // Increment skipped count
+            // Don't log to reduce spam
+            
+            // Apply normal delay (3-5 seconds) - we still hit Discord's API
+            const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          
+          if (errorData.captcha_key && errorData.captcha_sitekey) {
+            await logDmEvent(jobId, 'info', `🔐 Captcha required for ${memberId.substring(0, 8)}..., solving...`);
+            
+            const captchaKey = await solveDmCaptcha(
+              errorData.captcha_sitekey,
+              errorData.captcha_rqdata,
+              errorData.captcha_rqtoken
+            );
+            
+            await logDmEvent(jobId, 'info', `✅ Captcha solved, retrying send...`);
+            
+            // Retry with captcha (new fingerprint for retry)
+            const retrySendFingerprint = generateDiscordFingerprint();
+            sendResp = await fetch(`https://discord.com/api/v9/channels/${channelId}/messages`, {
+              method: 'POST',
+              headers: {
+                'Authorization': token,
+                'Content-Type': 'application/json',
+                'X-Super-Properties': retrySendFingerprint,
+                'X-Captcha-Key': captchaKey,
+                'X-Captcha-Rqtoken': errorData.captcha_rqtoken
+              },
+              body: JSON.stringify({ 
+                content: message,
+                captcha_key: captchaKey,
+                captcha_rqtoken: errorData.captcha_rqtoken
+              }),
+              signal: controller.signal,
+              agent: proxyAgent
+            });
+          }
+        }
+
+        if (!sendResp.ok) {
+          const errorText = await sendResp.text();
+          let errorData = {};
+          try {
+            errorData = JSON.parse(errorText);
+          } catch (e) {}
+          
+          // Check for "DMs disabled" error (code 340002 or 50007)
+          if (errorData.code === 340002 || errorData.code === 50007 || 
+              (errorData.message && (errorData.message.includes('Access to sending DMs') || 
+                                    errorData.message.includes('Cannot send messages to this user')))) {
+            // Silent success - user has DMs disabled, not a token error
+            // Still counts as API usage for rate limiting
+            const stats = tokenStats.get(tokenId);
+            stats.sentCount++; // Increment token usage (consumes rate limit quota)
+            stats.errorCount = 0; // Don't count as error
+            
+            await updateJobStats(jobId, 0, 0, 1); // Increment skipped count
+            // Don't log to reduce spam
+            
+            // Apply normal delay (3-5 seconds) - we still hit Discord's API
+            const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          
+          throw new Error(`Failed to send message: ${sendResp.status} ${errorText.substring(0, 150)}`);
         }
 
         sentCount++;
