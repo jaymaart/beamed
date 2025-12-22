@@ -161,13 +161,11 @@ class ScraperClient(discord.Client):
                     print("✅ CAPTCHA SOLVED!")
                     print("="*60 + "\n")
                     
-                    # Retry with captcha token - Discord expects captcha in headers AND body
+                    # Retry with captcha token - Discord expects captcha ONLY in headers
                     try:
                         from discord.http import Route
                         
-                        # Discord requires:
-                        # 1. Captcha key, rqtoken, and session_id in headers
-                        # 2. Captcha data also in JSON body
+                        # Discord API expects captcha data in custom headers
                         headers = {
                             "X-Captcha-Key": captcha_token,
                             "X-Captcha-Rqtoken": rqtoken
@@ -175,14 +173,10 @@ class ScraperClient(discord.Client):
                         if session_id:
                             headers["X-Captcha-Session-Id"] = session_id
                         
-                        payload = {
-                            "captcha_key": captcha_token,
-                            "captcha_rqtoken": rqtoken
-                        }
-                        if session_id:
-                            payload["captcha_session_id"] = session_id
+                        # Empty body for invite acceptance
+                        payload = {}
                         
-                        print(f"Submitting captcha with headers: {list(headers.keys())} and body keys: {list(payload.keys())}")
+                        print(f"Submitting captcha with headers: {list(headers.keys())}")
                         route = Route("POST", f"/invites/{self.invite_code}")
                         await self.http.request(route, json=payload, headers=headers)
                         
@@ -191,13 +185,25 @@ class ScraperClient(discord.Client):
                         guild = self.get_guild(guild_id)
                     except discord.HTTPException as retry_e:
                         error_msg = retry_e.text if hasattr(retry_e, 'text') else str(retry_e)
-                        print(f"Captcha retry failed: {retry_e.status} - {error_msg}")
+                        print(f"Join attempt failed: {retry_e.status} - {error_msg}")
                         
-                        # 403 errors often mean captcha solution was invalid/expired
-                        if retry_e.status == 403:
-                            self.result["error"] = f"Captcha solution rejected (403) - may be expired or invalid"
+                        # According to Discord docs:
+                        # - 400 = Captcha rejected, need to solve again
+                        # - 403 = Account banned/restricted or server blocks self-bots
+                        # - 404 = Invite invalid/expired
+                        
+                        if retry_e.status == 400:
+                            # Check if it's another captcha challenge
+                            if hasattr(retry_e, 'json') and retry_e.json and 'captcha_key' in retry_e.json:
+                                self.result["error"] = "Captcha solution rejected - server requires re-verification"
+                            else:
+                                self.result["error"] = f"Invalid request after captcha: {error_msg}"
+                        elif retry_e.status == 403:
+                            self.result["error"] = "Account restricted/banned or server blocks automated joins (403 Forbidden)"
+                        elif retry_e.status == 404:
+                            self.result["error"] = "Invite not found or expired"
                         else:
-                            self.result["error"] = f"Failed to join after captcha: {error_msg}"
+                            self.result["error"] = f"Join failed: {error_msg}"
                         await self.close()
                         return
                     except Exception as retry_e:
@@ -343,9 +349,12 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None):
             
             # Continue with next token even if this one fails
         
-        # Small delay between tokens to avoid rate limits
+        # Delay between tokens to avoid rate limits (longer after captcha)
         if idx < len(tokens):
-            await asyncio.sleep(2)
+            # Longer delay if we just solved a captcha
+            delay = 10 if "Captcha" in str(result.get("error", "")) or "captcha" in str(result.get("error", "")).lower() else 3
+            print(f"⏸️ Waiting {delay}s before next token...")
+            await asyncio.sleep(delay)
     
     if failed_tokens:
         print(f"\n⚠️ {len(failed_tokens)} invalid/unauthorized tokens detected")
