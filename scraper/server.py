@@ -105,25 +105,54 @@ class ScraperClient(discord.Client):
                 # Check if it's a captcha error
                 if e.status == 400 and "captcha" in str(e).lower():
                     print("Captcha required, solving...")
-                    print(f"Error response: {e.response if hasattr(e, 'response') else 'No response'}")
-                    print(f"Error text: {e.text if hasattr(e, 'text') else 'No text'}")
                     
                     # Extract captcha details from the error response
                     site_key = "4c672d35-0701-42b2-88c3-78380b0db560"  # Discord's hcaptcha site key
                     rqdata = None
+                    sitekey_from_response = None
                     
-                    # Try to get rqdata from the error
-                    if hasattr(e, 'response') and isinstance(e.response, dict):
-                        rqdata = e.response.get("captcha_rqdata")
-                    elif hasattr(e, 'text'):
-                        # Sometimes the error is in text format
+                    # discord.py HTTPException should have the JSON data
+                    # Try multiple ways to get it
+                    error_json = None
+                    
+                    # Check all attributes
+                    print(f"Exception attributes: {dir(e)}")
+                    
+                    # Try code attribute (discord.py stores error data here)
+                    if hasattr(e, 'code') and hasattr(e, 'response'):
+                        if isinstance(e.response, dict):
+                            error_json = e.response
+                    
+                    # Try response directly
+                    if not error_json and hasattr(e, 'response'):
+                        if isinstance(e.response, dict):
+                            error_json = e.response
+                        else:
+                            print(f"e.response is type: {type(e.response)}")
+                    
+                    # Try text as JSON
+                    if not error_json and hasattr(e, 'text') and e.text:
                         try:
-                            error_data = json.loads(e.text)
-                            rqdata = error_data.get("captcha_rqdata")
+                            error_json = json.loads(e.text)
                         except:
                             pass
                     
+                    # Try accessing response._json or response.data
+                    if not error_json and hasattr(e, 'response') and hasattr(e.response, '_json'):
+                        error_json = e.response._json
+                    
+                    if error_json:
+                        print(f"Error JSON: {error_json}")
+                        rqdata = error_json.get("captcha_rqdata")
+                        sitekey_from_response = error_json.get("captcha_sitekey")
+                        if sitekey_from_response:
+                            site_key = sitekey_from_response
+                    else:
+                        print(f"Could not parse error JSON")
+                        print(f"e.text: {e.text if hasattr(e, 'text') else 'N/A'}")
+                    
                     print(f"Extracted rqdata: {rqdata}")
+                    print(f"Using site_key: {site_key}")
                     
                     # Solve the captcha using our service (blocking call)
                     captcha_token = await asyncio.to_thread(solve_captcha, site_key, rqdata)
