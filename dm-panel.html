@@ -394,46 +394,65 @@
         document.getElementById('dm-token-upload').addEventListener('click', () => handleFileUpload('dm-token-file', 'token'));
         document.getElementById('dm-proxy-upload').addEventListener('click', () => handleFileUpload('dm-proxy-file', 'proxy'));
 
+        let scrapeCooldown = false;
+
         async function scrapeMembers() {
+            const scrapeBtn = document.getElementById('scrape-start');
+            
+            // Check cooldown
+            if (scrapeCooldown) {
+                logScrape('Please wait before scraping again', 'warn');
+                return;
+            }
+
             const invite = document.getElementById('scrape-invite').value.trim();
             const channelId = document.getElementById('scrape-channel').value.trim();
             if (!invite) {
                 logScrape('Invite required', 'error');
                 return;
             }
-            const headers = { 'Content-Type': 'application/json' };
-            if (SCRAPER_API_KEY) headers['x-api-key'] = SCRAPER_API_KEY;
+
+            // Disable button and start cooldown
+            scrapeBtn.disabled = true;
+            scrapeCooldown = true;
+            const originalText = scrapeBtn.textContent;
+            
+            let cooldownSeconds = 60;
+            const cooldownInterval = setInterval(() => {
+                cooldownSeconds--;
+                scrapeBtn.textContent = `Wait ${cooldownSeconds}s`;
+                if (cooldownSeconds <= 0) {
+                    clearInterval(cooldownInterval);
+                    scrapeBtn.textContent = originalText;
+                    scrapeBtn.disabled = false;
+                    scrapeCooldown = false;
+                }
+            }, 1000);
+
+            logScrape('🔍 Starting member scrape...');
+            logScrape(`📨 Sending request for invite: ${invite}`);
+            logScrape('⏳ This may take a while if captcha is required...');
+
             try {
-                const resp = await fetch(SCRAPER_URL, {
+                const resp = await fetch('/api/dm/user/scrape-members', {
                     method: 'POST',
-                    headers,
+                    headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
                     body: JSON.stringify({ invite, channel_id: channelId || undefined })
                 });
                 const data = await resp.json();
                 if (!resp.ok || !data.success) {
-                    logScrape(data.message || 'Scrape failed (scraper service)', 'error');
+                    logScrape(data.message || '❌ Scrape failed', 'error');
                     return;
                 }
-                logScrape(`Scrape queued/joined guild ${data.guild_id || ''}, inserted ${data.inserted || data.count || 0} members`);
+                logScrape(`✅ Successfully scraped guild ${data.guild_id || ''}`);
+                if (data.total && data.inserted !== data.total) {
+                    logScrape(`📊 Added ${data.inserted} new members (${data.total - data.inserted} already existed)`);
+                } else {
+                    logScrape(`📊 Added ${data.inserted || 0} members to database`);
+                }
                 await refreshMembers();
             } catch (err) {
-                // fallback to legacy endpoint
-                try {
-                    const fallback = await fetch('/api/dm/user/scrape-members', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
-                        body: JSON.stringify({ invite, channel_id: channelId || undefined })
-                    });
-                    const fdata = await fallback.json();
-                    if (!fallback.ok || !fdata.success) {
-                        logScrape(fdata.message || err.message, 'error');
-                        return;
-                    }
-                    logScrape(`Scrape queued (legacy) guild ${fdata.guild_id || ''}, inserted ${fdata.inserted || 0}`);
-                    await refreshMembers();
-                } catch (e2) {
-                    logScrape(e2.message, 'error');
-                }
+                logScrape('❌ Network error: ' + err.message, 'error');
             }
         }
 

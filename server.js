@@ -717,14 +717,16 @@ async function fetchJsonWithToken(url, token, proxyAgent) {
 
 app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, res) => {
   const { invite } = req.body || {};
-  if (!invite) return res.status(400).json({ success: false, message: 'invite required' });
+  if (!invite) return res.status(400).json({ success: false, message: '❌ Invite code required' });
 
   // Get first available token
   const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1', [req.dmUserId]);
-  if (!tokensRes.rowCount) return res.status(400).json({ success: false, message: 'No tokens available' });
+  if (!tokensRes.rowCount) return res.status(400).json({ success: false, message: '❌ No tokens available. Please upload tokens first.' });
   
   const token = tokensRes.rows[0].token;
   let inviteCode = invite.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
+  
+  console.log(`[SCRAPER] User ${req.dmUserId} scraping invite: ${inviteCode}`);
   
   // Call scraper service
   const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://192.168.1.11:8600/scrape';
@@ -737,9 +739,10 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
   const result = await scrapeResp.json().catch(() => ({}));
   
   if (!scrapeResp.ok || !result.success) {
+    console.log(`[SCRAPER] Failed: ${result.error || 'Unknown error'}`);
     return res.status(scrapeResp.status || 500).json({ 
       success: false, 
-      message: result.error || 'Scraper service failed' 
+      message: result.error || '❌ Scraper service failed' 
     });
   }
 
@@ -747,19 +750,30 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
   const guildId = result.guild_id;
   const members = result.members || [];
   
+  console.log(`[SCRAPER] Scraped ${members.length} members from guild ${guildId}`);
+  
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    let inserted = 0;
     for (const mid of members) {
-      await client.query(
+      const insertResult = await client.query(
         `INSERT INTO dm_members (id, user_id, guild_id, member_id, created_at)
          VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (user_id, member_id) DO NOTHING`,
+         ON CONFLICT (user_id, member_id) DO NOTHING
+         RETURNING id`,
         [uuidv4(), req.dmUserId, guildId, mid]
       );
+      if (insertResult.rowCount > 0) inserted++;
     }
     await client.query('COMMIT');
-    res.json({ success: true, guild_id: guildId, inserted: members.length });
+    console.log(`[SCRAPER] Inserted ${inserted} new members (${members.length - inserted} duplicates)`);
+    res.json({ 
+      success: true, 
+      guild_id: guildId, 
+      inserted: inserted,
+      total: members.length 
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
