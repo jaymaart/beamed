@@ -341,12 +341,23 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None, proxies=None):
         proxy = None
         if proxies:
             proxy_str = proxies[(idx - 1) % len(proxies)]
-            # Format proxy for aiohttp (http://user:pass@host:port or http://host:port)
+            # Format proxy for aiohttp: http://user:pass@host:port or http://host:port
             if not proxy_str.startswith('http'):
-                proxy = f"http://{proxy_str}"
+                # Parse host:port:user:pass format
+                parts = proxy_str.split(':')
+                if len(parts) == 4:
+                    host, port, user, password = parts
+                    proxy = f"http://{user}:{password}@{host}:{port}"
+                    print(f"[Token {idx}/{len(tokens)}] Using proxy: {host}:{port} (authenticated)")
+                elif len(parts) == 2:
+                    host, port = parts
+                    proxy = f"http://{host}:{port}"
+                    print(f"[Token {idx}/{len(tokens)}] Using proxy: {host}:{port}")
+                else:
+                    print(f"[Token {idx}/{len(tokens)}] Invalid proxy format: {proxy_str}")
             else:
                 proxy = proxy_str
-            print(f"[Token {idx}/{len(tokens)}] Using proxy: {proxy.split('@')[-1] if '@' in proxy else proxy}")
+                print(f"[Token {idx}/{len(tokens)}] Using proxy: {proxy.split('@')[-1] if '@' in proxy else proxy}")
         
         print(f"\n{'='*60}")
         print(f"[Token {idx}/{len(tokens)}] 🔑 Attempting scrape with {token[:10]}...")
