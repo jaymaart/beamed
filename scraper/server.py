@@ -111,45 +111,23 @@ class ScraperClient(discord.Client):
                     rqdata = None
                     sitekey_from_response = None
                     
-                    # discord.py HTTPException should have the JSON data
-                    # Try multiple ways to get it
+                    # discord.py HTTPException has a .json attribute with the error data
                     error_json = None
                     
-                    # Check all attributes
-                    print(f"Exception attributes: {dir(e)}")
-                    
-                    # Try code attribute (discord.py stores error data here)
-                    if hasattr(e, 'code') and hasattr(e, 'response'):
-                        if isinstance(e.response, dict):
-                            error_json = e.response
-                    
-                    # Try response directly
-                    if not error_json and hasattr(e, 'response'):
-                        if isinstance(e.response, dict):
-                            error_json = e.response
-                        else:
-                            print(f"e.response is type: {type(e.response)}")
-                    
-                    # Try text as JSON
-                    if not error_json and hasattr(e, 'text') and e.text:
-                        try:
-                            error_json = json.loads(e.text)
-                        except:
-                            pass
-                    
-                    # Try accessing response._json or response.data
-                    if not error_json and hasattr(e, 'response') and hasattr(e.response, '_json'):
-                        error_json = e.response._json
+                    # The exception has a .json attribute!
+                    if hasattr(e, 'json') and e.json:
+                        error_json = e.json
+                        print(f"Error JSON: {error_json}")
+                    else:
+                        print(f"No JSON data in exception")
                     
                     if error_json:
-                        print(f"Error JSON: {error_json}")
                         rqdata = error_json.get("captcha_rqdata")
                         sitekey_from_response = error_json.get("captcha_sitekey")
                         if sitekey_from_response:
                             site_key = sitekey_from_response
                     else:
-                        print(f"Could not parse error JSON")
-                        print(f"e.text: {e.text if hasattr(e, 'text') else 'N/A'}")
+                        print(f"Could not extract captcha data")
                     
                     print(f"Extracted rqdata: {rqdata}")
                     print(f"Using site_key: {site_key}")
