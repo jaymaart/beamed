@@ -121,10 +121,7 @@ async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0, skippedDelt
 async function createDiscordClient(token, proxyString = null) {
   const client = new Client({
     checkUpdate: false,
-    ws: { 
-      properties: { browser: 'Discord Client' },
-      large_threshold: 50
-    }
+    ws: { properties: { browser: 'Discord Client' } }
   });
   
   // Set proxy if provided (format: host:port:user:pass)
@@ -138,39 +135,21 @@ async function createDiscordClient(token, proxyString = null) {
       if (parts.length === 4) {
         const [host, port, user, pass] = parts;
         client.options.proxy = `http://${user}:${pass}@${host}:${port}`;
-        console.log(`[DISCORD CLIENT] Using proxy: ${host}:${port} (authenticated)`);
       } else if (parts.length === 2) {
         const [host, port] = parts;
         client.options.proxy = `http://${host}:${port}`;
-        console.log(`[DISCORD CLIENT] Using proxy: ${host}:${port}`);
       }
     }
   }
   
-  console.log(`[DISCORD CLIENT] Attempting login for token ${token.substring(0, 10)}...`);
-  
   await client.login(token);
   
-  console.log(`[DISCORD CLIENT] Login successful, waiting for ready event...`);
-  
-  // Wait for ready with longer timeout (60 seconds)
+  // Wait for ready
   await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      console.log(`[DISCORD CLIENT] Ready timeout after 60s for token ${token.substring(0, 10)}`);
-      reject(new Error('Client ready timeout (60s) - proxy or connection issue'));
-    }, 60000);
-    
+    const timeout = setTimeout(() => reject(new Error('Client ready timeout')), 30000);
     client.once('ready', () => {
       clearTimeout(timeout);
-      console.log(`[DISCORD CLIENT] Client ready for ${client.user.username}`);
       resolve();
-    });
-    
-    // Log any errors during connection
-    client.once('error', (err) => {
-      clearTimeout(timeout);
-      console.log(`[DISCORD CLIENT] Connection error: ${err.message}`);
-      reject(err);
     });
   });
   
