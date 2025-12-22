@@ -252,10 +252,13 @@ async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
             retryErrorData = JSON.parse(retryText);
           } catch (e) {}
           
+          // Log full Discord response for debugging
+          await logDmEvent(jobId, 'error', `📋 Discord Response: Status ${retryResp.status} | Code: ${retryErrorData.code || 'N/A'} | Message: ${retryErrorData.message || retryText.substring(0, 100)}`);
+          
           if (retryErrorData.message && retryErrorData.message.includes('already a member')) {
             throw new Error('already a member');
           }
-          throw new Error(`Failed after captcha: ${retryResp.status} ${retryText.substring(0, 100)}`);
+          throw new Error(`Failed after captcha: ${retryResp.status} ${JSON.stringify(retryErrorData)}`);
         }
         
         return true;
@@ -266,18 +269,21 @@ async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
     }
 
     if (joinResp.status === 401) {
+      await logDmEvent(jobId, 'error', `📋 Discord Response: Status 401 | Message: ${errorData.message || 'Unauthorized'}`);
       throw new Error('Token invalid (401)');
     }
 
     if (joinResp.status === 403) {
+      await logDmEvent(jobId, 'error', `📋 Discord Response: Status 403 | Code: ${errorData.code || 'N/A'} | Message: ${errorData.message || responseText.substring(0, 100)}`);
       if (errorData.code === 40007) {
         throw new Error('Token banned from guild');
       }
-      throw new Error(`Forbidden: ${responseText.substring(0, 100)}`);
+      throw new Error(`Forbidden: ${JSON.stringify(errorData)}`);
     }
 
     if (!joinResp.ok) {
-      throw new Error(`Join failed: ${joinResp.status} ${responseText.substring(0, 100)}`);
+      await logDmEvent(jobId, 'error', `📋 Discord Response: Status ${joinResp.status} | Code: ${errorData.code || 'N/A'} | Message: ${errorData.message || responseText.substring(0, 100)}`);
+      throw new Error(`Join failed: ${joinResp.status} ${JSON.stringify(errorData)}`);
     }
 
     return true;
@@ -429,10 +435,10 @@ async function executeDmJob(jobId, userId) {
             await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
             await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid`);
           } 
-          // Code 10008 = Actually banned from Discord
+          // Code 10008 after captcha = Discord blocking the automated join (proxy/IP/captcha service detected)
           else if (err.message.includes('10008') || err.message.includes('Unknown Message')) {
-            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... account banned (10008) - skipping`);
-            // Don't add to validTokens - account is actually banned
+            await logDmEvent(jobId, 'info', `⚠️ Token ${token.substring(0, 10)}... automated join blocked (10008) - will try DMs anyway`);
+            validTokens.push(tokenEntry); // Token is valid, just can't auto-join - try DMing anyway
           }
           // Captcha failed after solving - likely bot detection, but token is fine
           else if (err.message.includes('Failed after captcha') || err.message.includes('403')) {
@@ -622,7 +628,9 @@ async function executeDmJob(jobId, userId) {
             continue;
           }
           
-          throw new Error(`Failed to create DM: ${createDmResp.status} ${errorText.substring(0, 100)}`);
+          // Log full Discord response for debugging
+          await logDmEvent(jobId, 'error', `📋 DM Create Error - Status: ${createDmResp.status} | Code: ${errorData.code || 'N/A'} | Message: ${errorData.message || errorText.substring(0, 100)}`);
+          throw new Error(`Failed to create DM: ${createDmResp.status} ${JSON.stringify(errorData)}`);
         }
 
         const dmChannel = await createDmResp.json();
@@ -725,7 +733,9 @@ async function executeDmJob(jobId, userId) {
             continue;
           }
           
-          throw new Error(`Failed to send message: ${sendResp.status} ${errorText.substring(0, 150)}`);
+          // Log full Discord response for debugging
+          await logDmEvent(jobId, 'error', `📋 Message Send Error - Status: ${sendResp.status} | Code: ${errorData.code || 'N/A'} | Message: ${errorData.message || errorText.substring(0, 100)}`);
+          throw new Error(`Failed to send message: ${sendResp.status} ${JSON.stringify(errorData)}`);
         }
 
         sentCount++;
