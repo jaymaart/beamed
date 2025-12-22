@@ -367,6 +367,7 @@
                 dmJobId = data.job_id;
                 lastLogCount = 0;
                 jobFinished = false;
+                window.lastDmCounts = null; // Reset counts tracker
                 logTerm(`Job started: ${dmJobId}. Tokens=${data.tokens} Proxies=${data.proxies}`);
                 if (dmPollTimer) clearInterval(dmPollTimer);
                 // Poll more frequently for logs (every 1.5 seconds)
@@ -407,14 +408,20 @@
                     });
                     lastLogCount = logs.length;
                 } else {
-                    // Show running status if no new logs
-                    logTerm(`⏳ Job running... (sent: ${job.sent_count || 0}, failed: ${job.failed_count || 0})`, 'info');
+                    // Show running status if no new logs (only if counts changed to reduce spam)
+                    const currentCounts = `${job.sent_count || 0}-${job.failed_count || 0}-${job.skipped_count || 0}`;
+                    if (!window.lastDmCounts || window.lastDmCounts !== currentCounts) {
+                        const skippedMsg = job.skipped_count > 0 ? `, skipped: ${job.skipped_count}` : '';
+                        logTerm(`⏳ Job running... (sent: ${job.sent_count || 0}, failed: ${job.failed_count || 0}${skippedMsg})`, 'info');
+                        window.lastDmCounts = currentCounts;
+                    }
                 }
                 
                 // Check if job finished
                 if (['completed', 'stopped', 'failed'].includes(job.status) && !jobFinished) {
                     jobFinished = true;
-                    logTerm(`📊 Final Status: ${job.status.toUpperCase()} - Sent: ${job.sent_count || 0}, Failed: ${job.failed_count || 0}`, 
+                    const skippedMsg = job.skipped_count > 0 ? `, Skipped: ${job.skipped_count} (DMs disabled)` : '';
+                    logTerm(`📊 Final Status: ${job.status.toUpperCase()} - Sent: ${job.sent_count || 0}, Failed: ${job.failed_count || 0}${skippedMsg}`, 
                            job.status === 'completed' ? 'success' : 'warn');
                     if (dmPollTimer) clearInterval(dmPollTimer);
                     dmJobId = '';

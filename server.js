@@ -105,11 +105,11 @@ async function logDmEvent(jobId, logType, message) {
 }
 
 // Helper to update job counts
-async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0) {
+async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0, skippedDelta = 0) {
   try {
     await pool.query(
-      'UPDATE dm_jobs SET sent_count = sent_count + $1, failed_count = failed_count + $2, updated_at = NOW() WHERE id = $3',
-      [sentDelta, failedDelta, jobId]
+      'UPDATE dm_jobs SET sent_count = sent_count + $1, failed_count = failed_count + $2, skipped_count = skipped_count + $3, updated_at = NOW() WHERE id = $4',
+      [sentDelta, failedDelta, skippedDelta, jobId]
     );
   } catch (err) {
     console.error(`Failed to update job stats: ${err.message}`);
@@ -414,14 +414,18 @@ async function executeDmJob(jobId, userId) {
           // Small delay between join attempts to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (err) {
-          if (err.message.includes('Token invalid')) {
+          // Check for "server join restricted" error (code 340015)
+          if (err.message.includes('340015') || err.message.includes('Access to joining new servers')) {
+            await logDmEvent(jobId, 'info', `⏭️ Token ${token.substring(0, 10)}... restricted from joining servers (will try DMs anyway)`);
+            validTokens.push(tokenEntry); // Still add - can DM even if can't join
+          } else if (err.message.includes('Token invalid')) {
             await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
             await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... became invalid during join`);
           } else if (err.message.includes('already a member')) {
             await logDmEvent(jobId, 'info', `✓ Token ${token.substring(0, 10)}... already in guild`);
             validTokens.push(tokenEntry);
           } else {
-            await logDmEvent(jobId, 'error', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message}`);
+            await logDmEvent(jobId, 'info', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message} (will try DMs anyway)`);
             // Still add to valid tokens - might already be in guild or temporary error
             validTokens.push(tokenEntry);
           }
@@ -579,6 +583,30 @@ async function executeDmJob(jobId, userId) {
 
         if (!createDmResp.ok) {
           const errorText = await createDmResp.text();
+          let errorData = {};
+          try {
+            errorData = JSON.parse(errorText);
+          } catch (e) {}
+          
+          // Check for "Cannot send messages to this user" error (code 50007 or 340002)
+          if (errorData.code === 50007 || errorData.code === 340002 || 
+              (errorData.message && (errorData.message.includes('Cannot send messages to this user') || 
+                                    errorData.message.includes('Access to sending DMs')))) {
+            // Silent success - user has DMs disabled, not a token error
+            // Still counts as API usage for rate limiting
+            const stats = tokenStats.get(tokenId);
+            stats.sentCount++; // Increment token usage (consumes rate limit quota)
+            stats.errorCount = 0; // Don't count as error
+            
+            await updateJobStats(jobId, 0, 0, 1); // Increment skipped count
+            // Don't log this to reduce spam
+            
+            // Apply normal delay (3-5 seconds) - we still hit Discord's API
+            const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          
           throw new Error(`Failed to create DM: ${createDmResp.status} ${errorText.substring(0, 100)}`);
         }
 
@@ -601,7 +629,28 @@ async function executeDmJob(jobId, userId) {
 
         // Handle captcha if required
         if (sendResp.status === 400) {
-          const errorData = await sendResp.json().catch(() => ({}));
+          const errorText = await sendResp.text();
+          let errorData = {};
+          try {
+            errorData = JSON.parse(errorText);
+          } catch (e) {}
+          
+          // Check for DMs disabled on 400 too
+          if (errorData.code === 340002 || errorData.code === 50007) {
+            // Silent success - still counts as API usage
+            const stats = tokenStats.get(tokenId);
+            stats.sentCount++; // Increment token usage (consumes rate limit quota)
+            stats.errorCount = 0;
+            
+            await updateJobStats(jobId, 0, 0, 1); // Increment skipped count
+            // Don't log to reduce spam
+            
+            // Apply normal delay (3-5 seconds) - we still hit Discord's API
+            const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          
           if (errorData.captcha_key && errorData.captcha_sitekey) {
             await logDmEvent(jobId, 'info', `🔐 Captcha required for ${memberId.substring(0, 8)}..., solving...`);
             
@@ -637,6 +686,30 @@ async function executeDmJob(jobId, userId) {
 
         if (!sendResp.ok) {
           const errorText = await sendResp.text();
+          let errorData = {};
+          try {
+            errorData = JSON.parse(errorText);
+          } catch (e) {}
+          
+          // Check for "DMs disabled" error (code 340002 or 50007)
+          if (errorData.code === 340002 || errorData.code === 50007 || 
+              (errorData.message && (errorData.message.includes('Access to sending DMs') || 
+                                    errorData.message.includes('Cannot send messages to this user')))) {
+            // Silent success - user has DMs disabled, not a token error
+            // Still counts as API usage for rate limiting
+            const stats = tokenStats.get(tokenId);
+            stats.sentCount++; // Increment token usage (consumes rate limit quota)
+            stats.errorCount = 0; // Don't count as error
+            
+            await updateJobStats(jobId, 0, 0, 1); // Increment skipped count
+            // Don't log to reduce spam
+            
+            // Apply normal delay (3-5 seconds) - we still hit Discord's API
+            const delay = Math.floor(Math.random() * (DELAY_BETWEEN_MSG_MAX - DELAY_BETWEEN_MSG_MIN + 1)) + DELAY_BETWEEN_MSG_MIN;
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          
           throw new Error(`Failed to send message: ${sendResp.status} ${errorText.substring(0, 150)}`);
         }
 
@@ -675,10 +748,13 @@ async function executeDmJob(jobId, userId) {
       await new Promise(resolve => setTimeout(resolve, delay));
     }
 
-    // Job complete
+    // Job complete - get final stats
+    const finalJobRes = await pool.query('SELECT sent_count, failed_count, skipped_count FROM dm_jobs WHERE id=$1', [jobId]);
+    const finalStats = finalJobRes.rows[0] || { sent_count: sentCount, failed_count: failedCount, skipped_count: 0 };
+    
     const finalStatus = activeJobs.get(jobId)?.status === 'running' ? 'completed' : 'stopped';
     await pool.query('UPDATE dm_jobs SET status=$1, updated_at=NOW() WHERE id=$2', [finalStatus, jobId]);
-    await logDmEvent(jobId, 'info', `🏁 Job ${finalStatus}: ${sentCount} sent, ${failedCount} failed`);
+    await logDmEvent(jobId, 'info', `🏁 Job ${finalStatus}: ${finalStats.sent_count} sent, ${finalStats.failed_count} failed, ${finalStats.skipped_count} skipped (DMs disabled)`);
     activeJobs.delete(jobId);
 
   } catch (err) {
@@ -750,33 +826,23 @@ async function ensureSchema() {
       id UUID PRIMARY KEY,
       user_id TEXT NOT NULL,
       message TEXT,
-      delay_min INTEGER,
-      delay_max INTEGER,
       cap INTEGER,
-      randomize BOOLEAN DEFAULT true,
-      rand_suffix BOOLEAN DEFAULT true,
       status TEXT NOT NULL DEFAULT 'running',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       sent_count INTEGER DEFAULT 0,
       failed_count INTEGER DEFAULT 0,
+      skipped_count INTEGER DEFAULT 0,
       invite_code TEXT,
-      guild_id TEXT,
-      skip_token_after_errors INTEGER DEFAULT 10,
-      dm_cap_per_token INTEGER DEFAULT 0,
-      ratelimit_sleep_min INTEGER DEFAULT 600000,
-      ratelimit_sleep_max INTEGER DEFAULT 700000
+      guild_id TEXT
     );
   `);
   
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS sent_count INTEGER DEFAULT 0;`);
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS skipped_count INTEGER DEFAULT 0;`);
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS invite_code TEXT;`);
   await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS guild_id TEXT;`);
-  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS skip_token_after_errors INTEGER DEFAULT 10;`);
-  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS dm_cap_per_token INTEGER DEFAULT 0;`);
-  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS ratelimit_sleep_min INTEGER DEFAULT 600000;`);
-  await pool.query(`ALTER TABLE dm_jobs ADD COLUMN IF NOT EXISTS ratelimit_sleep_max INTEGER DEFAULT 700000;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dm_logs (
