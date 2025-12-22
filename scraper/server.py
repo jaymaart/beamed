@@ -119,9 +119,17 @@ class ScraperClient(discord.Client):
                         await self.close()
                         return
                     
-                    # Retry with captcha token
+                    # Retry with captcha token - make direct HTTP request
                     try:
-                        await invite.accept(captcha_key=captcha_token, captcha_rqtoken=rqdata)
+                        from discord.http import Route
+                        
+                        payload = {"captcha_key": captcha_token}
+                        if rqdata:
+                            payload["captcha_rqtoken"] = rqdata
+                            
+                        route = Route("POST", f"/invites/{self.invite_code}")
+                        await self.http.request(route, json=payload)
+                        
                         await asyncio.sleep(3)
                         guild = self.get_guild(guild_id)
                     except Exception as retry_e:
