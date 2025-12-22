@@ -132,17 +132,23 @@ class ScraperClient(discord.Client):
                         rqdata = None
                         rqtoken = None
                     
-                    print(f"Extracted rqdata: {rqdata}")
-                    print(f"Extracted rqtoken: {rqtoken}")
-                    print(f"Using site_key: {site_key}")
+                    print(f"📋 Extracted rqdata: {rqdata[:50] if rqdata else None}...")
+                    print(f"📋 Extracted rqtoken: {rqtoken[:50] if rqtoken else None}...")
+                    print(f"🔑 Using site_key: {site_key}")
+                    print("⏳ Sending to captcha solver...")
                     
                     # Solve the captcha using our service (blocking call)
                     captcha_token = await asyncio.to_thread(solve_captcha, site_key, rqdata)
                     
                     if not captcha_token:
+                        print("❌ CAPTCHA SOLVING FAILED")
+                        print("="*60 + "\n")
                         self.result["error"] = "Failed to solve captcha"
                         await self.close()
                         return
+                    
+                    print("✅ CAPTCHA SOLVED!")
+                    print("="*60 + "\n")
                     
                     # Retry with captcha token - make direct HTTP request
                     try:
@@ -185,13 +191,28 @@ class ScraperClient(discord.Client):
 
         members_data = []
         try:
-            # Chunk the guild to load all members
-            if not guild.chunked:
-                await guild.chunk()
+            print(f"Guild has {len(guild.members)} initially cached members")
             
-            for member in guild.members:
-                if not member.bot:
-                    members_data.append(str(member.id))
+            # For self-bots, use scrape_members which fetches from the member sidebar
+            try:
+                print("Scraping members from guild (this may take a while)...")
+                # scrape_members is the correct method for discord.py-self
+                # It scrapes the online member list like the Discord client does
+                await guild.scrape_members()
+                
+                print(f"Total members after scraping: {len(guild.members)}")
+                
+                for member in guild.members:
+                    if not member.bot:
+                        members_data.append(str(member.id))
+                        
+            except (AttributeError, Exception) as scrape_err:
+                # If scrape_members doesn't exist or fails, fall back to cached
+                print(f"Member scraping method unavailable or failed: {scrape_err}")
+                print("Using cached members only")
+                for member in guild.members:
+                    if not member.bot:
+                        members_data.append(str(member.id))
             
             self.result["success"] = True
             self.result["guild_id"] = str(guild.id)
