@@ -67,10 +67,11 @@ def solve_captcha(site_key, rqdata=None):
         return None
 
 class ScraperClient(discord.Client):
-    def __init__(self, invite_code, result_dict, *args, **kwargs):
+    def __init__(self, invite_code, result_dict, channel_id=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.invite_code = invite_code
         self.result = result_dict
+        self.target_channel_id = channel_id
 
     async def setup_hook(self):
         # This runs when the client is setting up, after the loop is created
@@ -197,28 +198,59 @@ class ScraperClient(discord.Client):
             try:
                 print("Querying members from guild (this may take a while)...")
                 
-                # Query all members using the guild's query_members method
-                # This sends gateway ops to get the member list
-                members = await guild.query_members(query='', limit=0)
-                print(f"Queried {len(members)} members")
+                # If specific channel ID provided, scrape from that channel
+                if self.target_channel_id:
+                    print(f"Using specific channel: {self.target_channel_id}")
+                    channel = guild.get_channel(int(self.target_channel_id))
+                    if channel:
+                        # Scrape members from the channel's member list
+                        seen_ids = set()
+                        async for message in channel.history(limit=1000):
+                            if message.author.id not in seen_ids and not message.author.bot:
+                                members_data.append(str(message.author.id))
+                                seen_ids.add(message.author.id)
+                        print(f"Scraped {len(members_data)} unique members from channel")
+                    else:
+                        print(f"Channel {self.target_channel_id} not found")
                 
-                for member in members:
-                    if not member.bot:
-                        members_data.append(str(member.id))
+                # If no channel specified or not enough members, query the whole guild
+                if len(members_data) < 100:
+                    print("Querying all guild members...")
+                    # query_members needs a query string - use common letter to match many users
+                    members = await guild.query_members(query='a', limit=1000)
+                    print(f"Queried {len(members)} members with 'a'")
+                    
+                    seen = set(members_data)
+                    for member in members:
+                        if not member.bot and str(member.id) not in seen:
+                            members_data.append(str(member.id))
+                            seen.add(str(member.id))
+                    
+                    # Try other common letters to get more members
+                    for letter in ['e', 's', 't', 'o', 'n']:
+                        try:
+                            more_members = await guild.query_members(query=letter, limit=1000)
+                            for member in more_members:
+                                if not member.bot and str(member.id) not in seen:
+                                    members_data.append(str(member.id))
+                                    seen.add(str(member.id))
+                        except:
+                            break
+                    
+                    print(f"Total queried: {len(members_data)} members")
                         
             except (AttributeError, Exception) as query_err:
                 print(f"Member querying failed: {query_err}")
                 # Fall back to fetching through channels if available
                 try:
                     print("Trying alternative method: fetching through text channels...")
-                    # Get members from channels (this can give us some members)
-                    seen_ids = set()
-                    for channel in guild.text_channels:
+                    seen_ids = set(members_data) if members_data else set()
+                    for channel in guild.text_channels[:5]:  # Limit to first 5 channels
                         try:
-                            async for message in channel.history(limit=100):
-                                if message.author.id not in seen_ids and not message.author.bot:
+                            async for message in channel.history(limit=200):
+                                if str(message.author.id) not in seen_ids and not message.author.bot:
                                     members_data.append(str(message.author.id))
-                                    seen_ids.add(message.author.id)
+                                    seen_ids.add(str(message.author.id))
                         except:
                             continue
                     print(f"Found {len(members_data)} unique members from messages")
@@ -239,11 +271,11 @@ class ScraperClient(discord.Client):
         
         await self.close()
 
-async def run_scrape(token, invite_code):
+async def run_scrape(token, invite_code, channel_id=None):
     result = {"success": False}
     
     try:
-        client = ScraperClient(invite_code, result)
+        client = ScraperClient(invite_code, result, channel_id)
         await client.start(token)
     except Exception as e:
         if not result.get("error"):
@@ -255,17 +287,18 @@ async def run_scrape(token, invite_code):
 def handle_scrape():
     print(f"Received scrape request")
     data = request.json
-    if not data or 'invite' not in data:
-        return jsonify({"success": False, "error": "Missing invite"}), 400
+    if not data or 'token' not in data or 'invite' not in data:
+        return jsonify({"success": False, "error": "Missing token or invite"}), 400
         
-    token = "MjE2ODU1Njg2MDI4NTkxMTA0.GnNNfR.9XbPA17A4H88TJP7tW3Ly-L5hkYZPtAeko9WQc"
+    token = data['token']
     invite = data['invite']
-    print(f"Scraping invite {invite} with token {token[:10]}...")
+    channel_id = data.get('channel_id')
+    print(f"Scraping invite {invite} with token {token[:10]}...{' (channel: ' + str(channel_id) + ')' if channel_id else ''}")
     
     # Run the async scrape in a new event loop for this request
     # Since Flask is synchronous by default, we use asyncio.run
     try:
-        result = asyncio.run(run_scrape(token, invite))
+        result = asyncio.run(run_scrape(token, invite, channel_id))
         print(f"Scrape result: {result.get('success')} {result.get('error')}")
         return jsonify(result)
     except Exception as e:

@@ -725,15 +725,16 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
   
   const token = tokensRes.rows[0].token;
   let inviteCode = invite.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
+  const { channel_id } = req.body || {};
   
-  console.log(`[SCRAPER] User ${req.dmUserId} scraping invite: ${inviteCode}`);
+  console.log(`[SCRAPER] User ${req.dmUserId} scraping invite: ${inviteCode}${channel_id ? ` (channel: ${channel_id})` : ''}`);
   
   // Call scraper service
   const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://192.168.1.11:8600/scrape';
   const scrapeResp = await fetch(scraperUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, invite: inviteCode })
+    body: JSON.stringify({ token, invite: inviteCode, channel_id })
   });
   
   const result = await scrapeResp.json().catch(() => ({}));
