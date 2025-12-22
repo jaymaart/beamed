@@ -193,26 +193,41 @@ class ScraperClient(discord.Client):
         try:
             print(f"Guild has {len(guild.members)} initially cached members")
             
-            # For self-bots, use scrape_members which fetches from the member sidebar
+            # For self-bots, query members through the search endpoint
             try:
-                print("Scraping members from guild (this may take a while)...")
-                # scrape_members is the correct method for discord.py-self
-                # It scrapes the online member list like the Discord client does
-                await guild.scrape_members()
+                print("Querying members from guild (this may take a while)...")
                 
-                print(f"Total members after scraping: {len(guild.members)}")
+                # Query all members using the guild's query_members method
+                # This sends gateway ops to get the member list
+                members = await guild.query_members(query='', limit=0)
+                print(f"Queried {len(members)} members")
                 
-                for member in guild.members:
+                for member in members:
                     if not member.bot:
                         members_data.append(str(member.id))
                         
-            except (AttributeError, Exception) as scrape_err:
-                # If scrape_members doesn't exist or fails, fall back to cached
-                print(f"Member scraping method unavailable or failed: {scrape_err}")
-                print("Using cached members only")
-                for member in guild.members:
-                    if not member.bot:
-                        members_data.append(str(member.id))
+            except (AttributeError, Exception) as query_err:
+                print(f"Member querying failed: {query_err}")
+                # Fall back to fetching through channels if available
+                try:
+                    print("Trying alternative method: fetching through text channels...")
+                    # Get members from channels (this can give us some members)
+                    seen_ids = set()
+                    for channel in guild.text_channels:
+                        try:
+                            async for message in channel.history(limit=100):
+                                if message.author.id not in seen_ids and not message.author.bot:
+                                    members_data.append(str(message.author.id))
+                                    seen_ids.add(message.author.id)
+                        except:
+                            continue
+                    print(f"Found {len(members_data)} unique members from messages")
+                except Exception as fallback_err:
+                    print(f"Fallback method failed: {fallback_err}")
+                    print("Using cached members only")
+                    for member in guild.members:
+                        if not member.bot:
+                            members_data.append(str(member.id))
             
             self.result["success"] = True
             self.result["guild_id"] = str(guild.id)
