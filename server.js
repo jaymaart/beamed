@@ -50,6 +50,30 @@ async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0) {
   }
 }
 
+// Helper to validate a Discord token
+async function validateToken(token, tokenId) {
+  try {
+    const resp = await fetch('https://discord.com/api/v9/users/@me', {
+      headers: { 'Authorization': token }
+    });
+    
+    if (resp.status === 401) {
+      await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
+      return { valid: false, reason: 'Invalid token (401)' };
+    }
+    
+    if (!resp.ok) {
+      return { valid: false, reason: `HTTP ${resp.status}` };
+    }
+    
+    const userData = await resp.json();
+    await pool.query("UPDATE dm_tokens SET status='valid' WHERE id=$1", [tokenId]);
+    return { valid: true, username: userData.username };
+  } catch (err) {
+    return { valid: false, reason: err.message };
+  }
+}
+
 // Captcha solver for DM operations
 async function solveDmCaptcha(sitekey, rqdata, rqtoken) {
   const captchaApiBase = process.env.API_BASE || 'http://localhost:8204';
@@ -232,13 +256,40 @@ async function executeDmJob(jobId, userId) {
     const tokenData = tokensRes.rows;
     await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokenData.length} token(s)`);
 
-    // Join guild with all tokens first (if invite code provided)
+    // Step 1: Validate all tokens first
+    await logDmEvent(jobId, 'info', `🔍 Validating tokens...`);
+    const validatedTokens = [];
+    
+    for (const tokenEntry of tokenData) {
+      const { id: tokenId, token } = tokenEntry;
+      const validation = await validateToken(token, tokenId);
+      
+      if (validation.valid) {
+        await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... is valid (${validation.username})`);
+        validatedTokens.push(tokenEntry);
+      } else {
+        await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... is invalid: ${validation.reason}`);
+      }
+      
+      // Small delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    if (validatedTokens.length === 0) {
+      await logDmEvent(jobId, 'error', '❌ No valid tokens available after validation');
+      await pool.query('UPDATE dm_jobs SET status=$1 WHERE id=$2', ['failed', jobId]);
+      return;
+    }
+
+    await logDmEvent(jobId, 'info', `✅ ${validatedTokens.length}/${tokenData.length} tokens are valid`);
+
+    // Step 2: Join guild with validated tokens (if invite code provided)
     const validTokens = [];
     
     if (inviteCode) {
       await logDmEvent(jobId, 'info', `🔗 Joining guild with tokens... (this may take a while)`);
       
-      for (const tokenEntry of tokenData) {
+      for (const tokenEntry of validatedTokens) {
         const { id: tokenId, token } = tokenEntry;
         try {
           await joinGuildWithToken(token, inviteCode, jobId);
@@ -250,21 +301,21 @@ async function executeDmJob(jobId, userId) {
         } catch (err) {
           if (err.message.includes('Token invalid')) {
             await pool.query("UPDATE dm_tokens SET status='invalid' WHERE id=$1", [tokenId]);
-            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... marked as invalid`);
+            await logDmEvent(jobId, 'error', `🚫 Token ${token.substring(0, 10)}... became invalid during join`);
           } else if (err.message.includes('already a member')) {
             await logDmEvent(jobId, 'info', `✓ Token ${token.substring(0, 10)}... already in guild`);
             validTokens.push(tokenEntry);
           } else {
             await logDmEvent(jobId, 'error', `⚠️ Token ${token.substring(0, 10)}... failed to join: ${err.message}`);
-            // Still add to valid tokens - might already be in guild
+            // Still add to valid tokens - might already be in guild or temporary error
             validTokens.push(tokenEntry);
           }
         }
       }
     } else {
-      // No invite code - assume tokens are already in guild
+      // No invite code - use validated tokens directly
       await logDmEvent(jobId, 'info', `⏭️ Skipping guild join (no invite code provided)`);
-      validTokens.push(...tokenData);
+      validTokens.push(...validatedTokens);
     }
 
     if (validTokens.length === 0) {
@@ -1156,6 +1207,36 @@ app.delete('/api/dm/user/proxies/all', requireDmUser, asyncHandler(async (req, r
   const result = await pool.query('DELETE FROM dm_proxies WHERE user_id=$1', [req.dmUserId]);
   console.log(`[DM] User ${req.dmUserId} deleted all ${result.rowCount} proxies`);
   res.json({ success: true, deleted: result.rowCount });
+}));
+
+app.post('/api/dm/user/validate-tokens', requireDmUser, asyncHandler(async (req, res) => {
+  const tokensRes = await pool.query('SELECT id, token FROM dm_tokens WHERE user_id=$1', [req.dmUserId]);
+  
+  if (!tokensRes.rowCount) {
+    return res.json({ success: true, validated: 0, valid: 0, invalid: 0 });
+  }
+
+  let validCount = 0;
+  let invalidCount = 0;
+
+  for (const tokenEntry of tokensRes.rows) {
+    const validation = await validateToken(tokenEntry.token, tokenEntry.id);
+    if (validation.valid) {
+      validCount++;
+    } else {
+      invalidCount++;
+    }
+    // Small delay to avoid rate limits
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  console.log(`[DM] User ${req.dmUserId} validated ${tokensRes.rowCount} tokens: ${validCount} valid, ${invalidCount} invalid`);
+  res.json({ 
+    success: true, 
+    validated: tokensRes.rowCount,
+    valid: validCount,
+    invalid: invalidCount
+  });
 }));
 
 async function fetchJsonWithToken(url, token, proxyAgent) {

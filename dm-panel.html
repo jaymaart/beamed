@@ -81,7 +81,10 @@
                 </div>
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h4 style="margin:0;">Tokens</h4>
-                    <button id="delete-all-tokens" style="background:#ff6b6b; padding:6px 12px; font-size:12px;">Delete All Tokens</button>
+                    <div style="display:flex; gap:8px;">
+                        <button id="validate-tokens" style="background:#2196f3; padding:6px 12px; font-size:12px;">Validate Tokens</button>
+                        <button id="delete-all-tokens" style="background:#ff6b6b; padding:6px 12px; font-size:12px;">Delete All Tokens</button>
+                    </div>
                 </div>
                 <table style="margin-top:8px;">
                     <thead><tr><th>ID</th><th>Token</th><th>Status</th><th></th></tr></thead>
@@ -245,13 +248,20 @@
         }
 
         function updateTokenStats(tokens) {
-            const validCount = tokens.filter(t => !t.status || t.status === 'valid').length;
+            const validCount = tokens.filter(t => t.status === 'valid').length;
             const invalidCount = tokens.filter(t => t.status === 'invalid').length;
+            const unknownCount = tokens.filter(t => !t.status || t.status === 'unknown').length;
             const totalCount = tokens.length;
             
             document.getElementById('token-valid-count').textContent = validCount;
             document.getElementById('token-invalid-count').textContent = invalidCount;
             document.getElementById('token-total-count').textContent = totalCount;
+            
+            // Update valid count color based on unknown tokens
+            const validEl = document.getElementById('token-valid-count');
+            if (unknownCount > 0) {
+                validEl.parentElement.title = `${validCount} valid, ${unknownCount} unknown (click "Validate Tokens" to check)`;
+            }
         }
 
         function renderTokenList(tbodyId, tokens) {
@@ -486,6 +496,32 @@
 
         document.getElementById('dm-token-upload').addEventListener('click', () => handleFileUpload('dm-token-file', 'token'));
         document.getElementById('dm-proxy-upload').addEventListener('click', () => handleFileUpload('dm-proxy-file', 'proxy'));
+
+        document.getElementById('validate-tokens').addEventListener('click', async () => {
+            const btn = document.getElementById('validate-tokens');
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Validating...';
+            
+            try {
+                const resp = await fetch('/api/dm/user/validate-tokens', {
+                    method: 'POST',
+                    headers: { 'x-dm-session': dmSession }
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert(`Validated ${data.validated} token(s):\n✅ Valid: ${data.valid}\n❌ Invalid: ${data.invalid}`);
+                    await refreshLists();
+                } else {
+                    alert('Failed to validate tokens');
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        });
 
         document.getElementById('delete-all-tokens').addEventListener('click', async () => {
             if (!confirm('Are you sure you want to delete ALL tokens? This cannot be undone.')) return;
