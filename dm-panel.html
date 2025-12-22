@@ -532,20 +532,42 @@
                     headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
                     body: JSON.stringify({ invite, channel_id: channelId || undefined })
                 });
+                
+                // Check if response is JSON
+                const contentType = resp.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await resp.text();
+                    logScrape(`❌ Server error (not JSON): ${text.substring(0, 200)}`, 'error');
+                    return;
+                }
+                
                 const data = await resp.json();
                 if (!resp.ok || !data.success) {
                     logScrape(data.message || '❌ Scrape failed', 'error');
                     return;
                 }
-                logScrape(`✅ Successfully scraped guild ${data.guild_id || ''}`);
+                
+                // Show token results
+                if (data.tokens_used !== undefined && data.tokens_total !== undefined) {
+                    logScrape(`✅ Successfully scraped with ${data.tokens_used}/${data.tokens_total} tokens`);
+                } else {
+                    logScrape(`✅ Successfully scraped guild ${data.guild_id || ''}`);
+                }
+                
                 if (data.total && data.inserted !== data.total) {
                     logScrape(`📊 Added ${data.inserted} new members (${data.total - data.inserted} already existed)`);
                 } else {
                     logScrape(`📊 Added ${data.inserted || 0} members to database`);
                 }
+                
+                // Show invalid tokens if any
+                if (data.invalid_count > 0) {
+                    logScrape(`⚠️ ${data.invalid_count} invalid/banned tokens detected`, 'warn');
+                }
+                
                 await refreshMembers();
             } catch (err) {
-                logScrape('❌ Network error: ' + err.message, 'error');
+                logScrape('❌ Error: ' + err.message, 'error');
             }
         }
 

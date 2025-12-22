@@ -328,7 +328,9 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None):
     print(f"Starting multi-token scrape with {len(tokens)} tokens...")
     
     for idx, token in enumerate(tokens, 1):
-        print(f"\n[Token {idx}/{len(tokens)}] Attempting scrape with {token[:10]}...")
+        print(f"\n{'='*60}")
+        print(f"[Token {idx}/{len(tokens)}] 🔑 Attempting scrape with {token[:10]}...")
+        print(f"{'='*60}")
         
         result = await run_scrape(token, invite_code, channel_id)
         
@@ -338,14 +340,28 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None):
             members = result.get("members", [])
             new_members = len(members) - len(all_members & set(members))
             all_members.update(members)
-            print(f"[Token {idx}/{len(tokens)}] ✅ Success! Added {new_members} new members (total: {len(all_members)})")
+            print(f"{'='*60}")
+            print(f"[Token {idx}/{len(tokens)}] ✅ SUCCESS!")
+            print(f"  └─ Added {new_members} new members (total: {len(all_members)})")
+            print(f"{'='*60}")
         else:
             error = result.get("error", "Unknown error")
-            print(f"[Token {idx}/{len(tokens)}] ❌ Failed: {error}")
             
-            # Track failed tokens for debugging
-            if "Improper token" in error or "Unauthorized" in error:
+            # Determine error type for better logging
+            error_type = "❌"
+            if "Captcha" in error or "captcha" in error:
+                error_type = "🔐 CAPTCHA FAILED"
+            elif "Improper token" in error or "Unauthorized" in error:
+                error_type = "🚫 INVALID TOKEN"
                 failed_tokens.append(token[:15])
+            elif "restricted" in error.lower() or "banned" in error.lower():
+                error_type = "⛔ ACCOUNT BANNED"
+                failed_tokens.append(token[:15])
+            
+            print(f"{'='*60}")
+            print(f"[Token {idx}/{len(tokens)}] {error_type}")
+            print(f"  └─ {error}")
+            print(f"{'='*60}")
             
             # Continue with next token even if this one fails
         
@@ -356,14 +372,19 @@ async def run_scrape_multi(tokens, invite_code, channel_id=None):
             print(f"⏸️ Waiting {delay}s before next token...")
             await asyncio.sleep(delay)
     
+    # Final summary
+    print(f"\n{'='*60}")
+    print(f"📊 SCRAPE SUMMARY")
+    print(f"{'='*60}")
+    print(f"  ✅ Successful tokens: {successful_scrapes}/{len(tokens)}")
+    print(f"  ❌ Failed tokens: {len(tokens) - successful_scrapes}/{len(tokens)}")
     if failed_tokens:
-        print(f"\n⚠️ {len(failed_tokens)} invalid/unauthorized tokens detected")
+        print(f"  🚫 Invalid/banned tokens: {len(failed_tokens)}")
+    print(f"  👥 Total unique members: {len(all_members)}")
+    print(f"{'='*60}\n")
     
     if len(all_members) == 0:
         return {"success": False, "error": "All tokens failed to scrape members"}
-    
-    print(f"\n✅ Multi-token scrape complete: {successful_scrapes}/{len(tokens)} tokens successful")
-    print(f"📊 Total unique members: {len(all_members)}")
     
     return {
         "success": True,

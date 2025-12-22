@@ -752,7 +752,17 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
     body: JSON.stringify({ tokens, invite: inviteCode, channel_id })
   });
   
-  const result = await scrapeResp.json().catch(() => ({}));
+  let result;
+  try {
+    result = await scrapeResp.json();
+  } catch (parseErr) {
+    const text = await scrapeResp.text().catch(() => 'Unable to read response');
+    console.log(`[SCRAPER] Failed to parse JSON: ${text.substring(0, 200)}`);
+    return res.status(scrapeResp.status || 500).json({ 
+      success: false, 
+      message: '❌ Scraper service returned invalid response' 
+    });
+  }
   
   if (!scrapeResp.ok || !result.success) {
     console.log(`[SCRAPER] Failed: ${result.error || 'Unknown error'}`);
@@ -806,11 +816,17 @@ app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, 
     
     await client.query('COMMIT');
     console.log(`[SCRAPER] Inserted ${inserted} new members (${members.length - inserted} duplicates)`);
+    
+    const invalidCount = result.invalid_tokens ? result.invalid_tokens.length : 0;
+    
     res.json({ 
       success: true, 
       guild_id: guildId, 
       inserted: inserted,
-      total: members.length 
+      total: members.length,
+      tokens_used: result.tokens_used || 1,
+      tokens_total: result.tokens_total || 1,
+      invalid_count: invalidCount
     });
   } catch (err) {
     await client.query('ROLLBACK');
