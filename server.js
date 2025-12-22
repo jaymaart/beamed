@@ -118,28 +118,16 @@ async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0, skippedDelt
 }
 
 // Helper to create and login a Discord client
-async function createDiscordClient(token, proxyString = null) {
+async function createDiscordClient(token, proxy = null) {
   const client = new Client({
     checkUpdate: false,
     ws: { properties: { browser: 'Discord Client' } }
   });
   
-  // Set proxy if provided (format: host:port:user:pass)
-  if (proxyString) {
-    const proxyAgent = createProxyAgent(proxyString);
-    if (proxyAgent) {
-      client.options.http.agent = proxyAgent;
-      
-      // Also set proxy URL for websocket connection
-      const parts = proxyString.split(':');
-      if (parts.length === 4) {
-        const [host, port, user, pass] = parts;
-        client.options.proxy = `http://${user}:${pass}@${host}:${port}`;
-      } else if (parts.length === 2) {
-        const [host, port] = parts;
-        client.options.proxy = `http://${host}:${port}`;
-      }
-    }
+  // Set proxy if provided
+  if (proxy) {
+    client.options.proxy = proxy;
+    client.options.http.agent = createProxyAgent(proxy);
   }
   
   await client.login(token);
