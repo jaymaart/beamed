@@ -718,68 +718,6 @@ async function fetchJsonWithToken(url, token, proxyAgent) {
   return { resp, data };
 }
 
-async function scrapeMembersWithInvite(userId, invite, maxMembers = 10000, useProxy = false, channelId = null) {
-  const tokensRes = await pool.query('SELECT token FROM dm_tokens WHERE user_id=$1 ORDER BY created_at DESC', [userId]);
-  if (!tokensRes.rowCount) throw new Error('No tokens available');
-  const tokenList = tokensRes.rows.map(r => r.token).filter(Boolean);
-
-  let inviteCode = invite || '';
-  inviteCode = inviteCode.replace(/https?:\/\/(www\.)?discord\.gg\//i, '').replace(/https?:\/\/discord\.com\/invite\//i, '').trim();
-  if (!inviteCode) throw new Error('Invite code required');
-
-  const inviteUrl = `https://discord.com/api/v9/invites/${encodeURIComponent(inviteCode)}?with_counts=true&with_expiration=true`;
-  // Using Docker service name 'scraper' if running in Docker, otherwise localhost
-  const scraperUrl = process.env.SCRAPER_SERVICE_URL || 'http://192.168.1.11:8600/scrape';
-
-  for (const tok of tokenList) {
-    try {
-      // Call the scraper service
-      const scrapeResp = await fetch(scraperUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: tok, invite: inviteCode })
-      });
-      
-      const result = await scrapeResp.json().catch(() => ({}));
-      
-      if (!scrapeResp.ok || !result.success) {
-          throw new Error(result.error || `Scraper service error: ${scrapeResp.status}`);
-      }
-
-      if (result.success) {
-         // Insert into DB
-         const guildId = result.guild_id;
-         const members = result.members || [];
-         
-         const client = await pool.connect();
-         try {
-           await client.query('BEGIN');
-           for (const mid of members) {
-             await client.query(
-               `INSERT INTO dm_members (id, user_id, guild_id, member_id, created_at)
-                VALUES ($1, $2, $3, $4, NOW())
-                ON CONFLICT (user_id, member_id) DO NOTHING`,
-               [uuidv4(), userId, guildId, mid]
-             );
-           }
-           await client.query('COMMIT');
-           return { guildId, inserted: members.length };
-         } catch (err) {
-           await client.query('ROLLBACK');
-           throw err;
-         } finally {
-           client.release();
-         }
-      }
-    } catch (err) {
-      console.error(`Token ${tok.substring(0, 10)}... failed:`, err.message);
-      // continue to next token
-    }
-  }
-
-  throw new Error('All tokens failed to scrape or join the server.');
-}
-
 app.post('/api/dm/user/scrape-members', requireDmUser, asyncHandler(async (req, res) => {
   const { invite, max, channel_id } = req.body || {};
   if (!invite) return res.status(400).json({ success: false, message: 'invite required' });

@@ -52,15 +52,17 @@ async def run_scrape(token, invite_code):
                     return
 
             if not guild:
+                # Try to find it in cache if we were already in it
                 guild = client.get_guild(invite.guild.id)
             
             if not guild:
-                result["error"] = "Could not resolve guild after join"
+                result["error"] = f"Could not resolve guild {invite.guild.id} after join attempt"
                 await client.close()
                 return
 
             members_data = []
             try:
+                # This might take a while for large servers
                 if not guild.chunked:
                     await guild.chunk()
                 
@@ -85,25 +87,29 @@ async def run_scrape(token, invite_code):
         
     except Exception as e:
         if not result.get("error"):
-            result["error"] = str(e)
+            result["error"] = f"Client exception: {str(e)}"
             
     return result
 
 @app.route('/scrape', methods=['POST'])
 def handle_scrape():
+    print(f"Received scrape request")
     data = request.json
     if not data or 'token' not in data or 'invite' not in data:
         return jsonify({"success": False, "error": "Missing token or invite"}), 400
         
     token = data['token']
     invite = data['invite']
+    print(f"Scraping invite {invite} with token {token[:10]}...")
     
     # Run the async scrape in a new event loop for this request
     # Since Flask is synchronous by default, we use asyncio.run
     try:
         result = asyncio.run(run_scrape(token, invite))
+        print(f"Scrape result: {result.get('success')} {result.get('error')}")
         return jsonify(result)
     except Exception as e:
+        print(f"Server exception: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':

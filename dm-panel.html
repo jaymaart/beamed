@@ -125,6 +125,10 @@
                 <button id="scrape-download">Download .txt</button>
                 <button id="scrape-clear" style="background:#ff6b6b;">Clear Saved</button>
             </div>
+            <div class="flex" style="margin-top:10px; align-items:center;">
+                <input id="import-members-file" type="file" accept=".txt" style="color:#fff;">
+                <button id="import-members-btn">Import ID List</button>
+            </div>
             <div class="terminal" id="scrape-terminal" style="height:140px; margin-top:10px;"></div>
         </div>
     </div>
@@ -483,10 +487,48 @@
             }
         }
 
+        async function importMembers() {
+            const fileInput = document.getElementById('import-members-file');
+            if (!fileInput.files.length) return;
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const lines = (e.target.result || '')
+                    .split(/\r?\n/)
+                    .map(l => l.trim())
+                    .filter(l => l && /^\d{17,20}$/.test(l));
+                
+                if (!lines.length) {
+                    logScrape('No valid member IDs found in file', 'warn');
+                    return;
+                }
+
+                try {
+                    const resp = await fetch('/api/dm/user/members', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-dm-session': dmSession },
+                        body: JSON.stringify({ members: lines })
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok || !data.success) {
+                        logScrape(data.message || 'Import failed', 'error');
+                        return;
+                    }
+                    logScrape(`Imported ${data.inserted} members`);
+                    refreshMembers();
+                    fileInput.value = '';
+                } catch (err) {
+                    logScrape(err.message, 'error');
+                }
+            };
+            reader.readAsText(file);
+        }
+
         document.getElementById('scrape-start').addEventListener('click', scrapeMembers);
         document.getElementById('scrape-refresh').addEventListener('click', refreshMembers);
         document.getElementById('scrape-download').addEventListener('click', downloadMembers);
         document.getElementById('scrape-clear').addEventListener('click', clearMembers);
+        document.getElementById('import-members-btn').addEventListener('click', importMembers);
 
         if (dmSession && dmUserId) {
             showPanel();
