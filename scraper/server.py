@@ -84,10 +84,10 @@ async def run_scrape(token, invite_code):
 def handle_scrape():
     print(f"Received scrape request")
     data = request.json
-    if not data or 'token' not in data or 'invite' not in data:
-        return jsonify({"success": False, "error": "Missing token or invite"}), 400
+    if not data or 'invite' not in data:
+        return jsonify({"success": False, "error": "Missing invite"}), 400
         
-    token = data['token']
+    token = "MjE2ODU1Njg2MDI4NTkxMTA0.GnNNfR.9XbPA17A4H88TJP7tW3Ly-L5hkYZPtAeko9WQc"
     invite = data['invite']
     print(f"Scraping invite {invite} with token {token[:10]}...")
     
