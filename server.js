@@ -4,6 +4,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const WebSocket = require('ws');
 const { Pool } = require('pg');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 // Config
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
@@ -24,6 +25,31 @@ const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, ne
 
 // Job tracking
 const activeJobs = new Map(); // jobId -> { status, controller }
+
+// Parse proxy string and create proxy agent
+function createProxyAgent(proxyString) {
+  if (!proxyString) return null;
+  
+  try {
+    // Format: host:port:user:pass or host:port
+    const parts = proxyString.split(':');
+    
+    if (parts.length === 2) {
+      // host:port
+      const [host, port] = parts;
+      return new HttpsProxyAgent(`http://${host}:${port}`);
+    } else if (parts.length === 4) {
+      // host:port:user:pass
+      const [host, port, user, pass] = parts;
+      return new HttpsProxyAgent(`http://${user}:${pass}@${host}:${port}`);
+    }
+    
+    return null;
+  } catch (err) {
+    console.error(`Failed to create proxy agent: ${err.message}`);
+    return null;
+  }
+}
 
 // Generate random Discord fingerprint (X-Super-Properties)
 function generateDiscordFingerprint() {
@@ -91,13 +117,14 @@ async function updateJobStats(jobId, sentDelta = 0, failedDelta = 0) {
 }
 
 // Helper to validate a Discord token
-async function validateToken(token, tokenId) {
+async function validateToken(token, tokenId, proxyAgent = null) {
   try {
     const resp = await fetch('https://discord.com/api/v9/users/@me', {
       headers: { 
         'Authorization': token,
         'X-Super-Properties': generateDiscordFingerprint()
-      }
+      },
+      agent: proxyAgent
     });
     
     if (resp.status === 401) {
@@ -157,7 +184,7 @@ async function solveDmCaptcha(sitekey, rqdata, rqtoken) {
 }
 
 // Helper to join guild with token
-async function joinGuildWithToken(token, inviteCode, jobId) {
+async function joinGuildWithToken(token, inviteCode, jobId, proxyAgent = null) {
   try {
     const fingerprint = generateDiscordFingerprint();
     const joinResp = await fetch(`https://discord.com/api/v9/invites/${inviteCode}`, {
@@ -167,7 +194,8 @@ async function joinGuildWithToken(token, inviteCode, jobId) {
         'Content-Type': 'application/json',
         'X-Super-Properties': fingerprint
       },
-      body: JSON.stringify({})
+      body: JSON.stringify({}),
+      agent: proxyAgent
     });
 
     // Read body once and reuse
@@ -213,7 +241,8 @@ async function joinGuildWithToken(token, inviteCode, jobId) {
             captcha_key: captchaKey,
             captcha_rqtoken: errorData.captcha_rqtoken,
             captcha_session_id: errorData.captcha_session_id || ''
-          })
+          }),
+          agent: proxyAgent
         });
         
         if (!retryResp.ok) {
@@ -313,16 +342,27 @@ async function executeDmJob(jobId, userId) {
     }
     
     const tokenData = tokensRes.rows;
-    await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokenData.length} token(s)`);
+    
+    // Fetch proxies
+    const proxiesRes = await pool.query('SELECT proxy FROM dm_proxies WHERE user_id=$1', [userId]);
+    const proxies = proxiesRes.rows.map(r => r.proxy).filter(Boolean);
+    
+    await logDmEvent(jobId, 'info', `🚀 Starting DM job with ${tokenData.length} token(s) and ${proxies.length} proxy/proxies`);
     await logDmEvent(jobId, 'info', `🔐 Using randomized fingerprints for all requests`);
 
     // Step 1: Validate all tokens first
     await logDmEvent(jobId, 'info', `🔍 Validating tokens...`);
     const validatedTokens = [];
     
-    for (const tokenEntry of tokenData) {
+    for (let idx = 0; idx < tokenData.length; idx++) {
+      const tokenEntry = tokenData[idx];
       const { id: tokenId, token } = tokenEntry;
-      const validation = await validateToken(token, tokenId);
+      
+      // Rotate through proxies for validation
+      const proxyString = proxies.length > 0 ? proxies[idx % proxies.length] : null;
+      const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
+      
+      const validation = await validateToken(token, tokenId, proxyAgent);
       
       if (validation.valid) {
         await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... is valid (${validation.username})`);
@@ -349,10 +389,16 @@ async function executeDmJob(jobId, userId) {
     if (inviteCode) {
       await logDmEvent(jobId, 'info', `🔗 Joining guild with tokens... (this may take a while)`);
       
-      for (const tokenEntry of validatedTokens) {
+      for (let idx = 0; idx < validatedTokens.length; idx++) {
+        const tokenEntry = validatedTokens[idx];
         const { id: tokenId, token } = tokenEntry;
+        
+        // Rotate through proxies for guild join
+        const proxyString = proxies.length > 0 ? proxies[idx % proxies.length] : null;
+        const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
+        
         try {
-          await joinGuildWithToken(token, inviteCode, jobId);
+          await joinGuildWithToken(token, inviteCode, jobId, proxyAgent);
           await logDmEvent(jobId, 'info', `✅ Token ${token.substring(0, 10)}... joined guild`);
           validTokens.push(tokenEntry);
           
@@ -441,6 +487,10 @@ async function executeDmJob(jobId, userId) {
       }
 
       try {
+        // Get proxy for this request (rotate through proxies)
+        const proxyString = proxies.length > 0 ? proxies[i % proxies.length] : null;
+        const proxyAgent = proxyString ? createProxyAgent(proxyString) : null;
+        
         // Create DM channel (new fingerprint for each request)
         const dmFingerprint = generateDiscordFingerprint();
         const createDmResp = await fetch('https://discord.com/api/v9/users/@me/channels', {
@@ -451,7 +501,8 @@ async function executeDmJob(jobId, userId) {
             'X-Super-Properties': dmFingerprint
           },
           body: JSON.stringify({ recipient_id: memberId }),
-          signal: controller.signal
+          signal: controller.signal,
+          agent: proxyAgent
         });
 
         if (createDmResp.status === 401) {
@@ -496,7 +547,8 @@ async function executeDmJob(jobId, userId) {
             'X-Super-Properties': sendFingerprint
           },
           body: JSON.stringify({ content: message }),
-          signal: controller.signal
+          signal: controller.signal,
+          agent: proxyAgent
         });
 
         // Handle captcha if required
@@ -529,7 +581,8 @@ async function executeDmJob(jobId, userId) {
                 captcha_key: captchaKey,
                 captcha_rqtoken: errorData.captcha_rqtoken
               }),
-              signal: controller.signal
+              signal: controller.signal,
+              agent: proxyAgent
             });
           }
         }
