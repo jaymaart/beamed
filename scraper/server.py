@@ -105,11 +105,25 @@ class ScraperClient(discord.Client):
                 # Check if it's a captcha error
                 if e.status == 400 and "captcha" in str(e).lower():
                     print("Captcha required, solving...")
+                    print(f"Error response: {e.response if hasattr(e, 'response') else 'No response'}")
+                    print(f"Error text: {e.text if hasattr(e, 'text') else 'No text'}")
                     
-                    # Extract captcha details from the error
-                    # Discord captcha typically uses hcaptcha
+                    # Extract captcha details from the error response
                     site_key = "4c672d35-0701-42b2-88c3-78380b0db560"  # Discord's hcaptcha site key
-                    rqdata = e.response.get("captcha_rqdata") if hasattr(e, 'response') and isinstance(e.response, dict) else None
+                    rqdata = None
+                    
+                    # Try to get rqdata from the error
+                    if hasattr(e, 'response') and isinstance(e.response, dict):
+                        rqdata = e.response.get("captcha_rqdata")
+                    elif hasattr(e, 'text'):
+                        # Sometimes the error is in text format
+                        try:
+                            error_data = json.loads(e.text)
+                            rqdata = error_data.get("captcha_rqdata")
+                        except:
+                            pass
+                    
+                    print(f"Extracted rqdata: {rqdata}")
                     
                     # Solve the captcha using our service (blocking call)
                     captcha_token = await asyncio.to_thread(solve_captcha, site_key, rqdata)
@@ -126,13 +140,21 @@ class ScraperClient(discord.Client):
                         payload = {"captcha_key": captcha_token}
                         if rqdata:
                             payload["captcha_rqtoken"] = rqdata
-                            
+                        
+                        print(f"Submitting captcha with payload keys: {list(payload.keys())}")
                         route = Route("POST", f"/invites/{self.invite_code}")
                         await self.http.request(route, json=payload)
                         
+                        print("Successfully joined with captcha!")
                         await asyncio.sleep(3)
                         guild = self.get_guild(guild_id)
+                    except discord.HTTPException as retry_e:
+                        print(f"Captcha retry failed: {retry_e.status} - {retry_e.text if hasattr(retry_e, 'text') else str(retry_e)}")
+                        self.result["error"] = f"Failed to join after captcha: {str(retry_e)}"
+                        await self.close()
+                        return
                     except Exception as retry_e:
+                        print(f"Captcha retry exception: {type(retry_e).__name__} - {str(retry_e)}")
                         self.result["error"] = f"Failed to join after captcha: {str(retry_e)}"
                         await self.close()
                         return
