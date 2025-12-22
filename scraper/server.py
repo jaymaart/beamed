@@ -124,6 +124,7 @@ class ScraperClient(discord.Client):
                     rqdata = error_json.get("captcha_rqdata")
                     rqtoken = error_json.get("captcha_rqtoken")
                     site_key = error_json.get("captcha_sitekey")
+                    session_id = error_json.get("captcha_session_id")
                     
                     if not site_key or not rqtoken:
                         print(f"❌ Missing required captcha data")
@@ -133,11 +134,18 @@ class ScraperClient(discord.Client):
                     
                     print(f"📋 Extracted rqdata: {rqdata[:50] if rqdata else None}...")
                     print(f"📋 Extracted rqtoken: {rqtoken[:50] if rqtoken else None}...")
+                    print(f"📋 Extracted session_id: {session_id}")
                     print(f"🔑 Using site_key: {site_key}")
                     print("⏳ Sending to captcha solver...")
                     
+                    import time
+                    solve_start = time.time()
+                    
                     # Solve the captcha using our service (blocking call)
                     captcha_token = await asyncio.to_thread(solve_captcha, site_key, rqdata)
+                    
+                    solve_duration = time.time() - solve_start
+                    print(f"⏱️ Captcha solved in {solve_duration:.1f}s")
                     
                     if not captcha_token:
                         print("❌ CAPTCHA SOLVING FAILED")
@@ -146,6 +154,10 @@ class ScraperClient(discord.Client):
                         await self.close()
                         return
                     
+                    # Check if solve took too long (captchas may expire)
+                    if solve_duration > 120:
+                        print("⚠️ WARNING: Captcha took over 2 minutes to solve - may be expired")
+                    
                     print("✅ CAPTCHA SOLVED!")
                     print("="*60 + "\n")
                     
@@ -153,22 +165,22 @@ class ScraperClient(discord.Client):
                     try:
                         from discord.http import Route
                         
-                        # Discord requires both:
-                        # 1. Captcha data in custom headers
-                        # 2. Content-Type: application/json
-                        # 3. Captcha data also in JSON body
+                        # Discord requires:
+                        # 1. Captcha key, rqtoken, and session_id in headers
+                        # 2. Captcha data also in JSON body
                         headers = {
                             "X-Captcha-Key": captcha_token,
-                            "Content-Type": "application/json"
+                            "X-Captcha-Rqtoken": rqtoken
                         }
-                        if rqtoken:
-                            headers["X-Captcha-Rqtoken"] = rqtoken
+                        if session_id:
+                            headers["X-Captcha-Session-Id"] = session_id
                         
                         payload = {
-                            "captcha_key": captcha_token
+                            "captcha_key": captcha_token,
+                            "captcha_rqtoken": rqtoken
                         }
-                        if rqtoken:
-                            payload["captcha_rqtoken"] = rqtoken
+                        if session_id:
+                            payload["captcha_session_id"] = session_id
                         
                         print(f"Submitting captcha with headers: {list(headers.keys())} and body keys: {list(payload.keys())}")
                         route = Route("POST", f"/invites/{self.invite_code}")
