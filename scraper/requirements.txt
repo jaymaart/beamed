@@ -1,4 +1,4 @@
-discord.py-self
-flask
-requests
-aiohttp
+discord.py-self==2.0.0
+flask==3.0.3
+requests==2.32.3
+aiohttp==3.9.5
